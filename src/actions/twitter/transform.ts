@@ -39,6 +39,8 @@ export function extractText(tweet: any) {
 export function extractTweet(tweet: any) {
   if (tweet.__typename === 'TimelineTweet') {
     tweet = tweet.tweet_results.result
+  } else if (tweet.__typename === 'TweetWithVisibilityResults') {
+    tweet = tweet.tweet
   }
   // const tweet = tweetData.tweet_results ? tweetData.tweet_results.result : tweetData
   const user = tweet.core.user_results.result
