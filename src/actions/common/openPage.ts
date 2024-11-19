@@ -142,7 +142,7 @@ async function setupNetworkMonitoring(client: Client) {
   )
 }
 
-export async function openPage({ url, port = 9222 }: PageOptions): Promise<PageManager> {
+export async function openPage({ url, port = Number(process.env.CHROME_PORT) || 9222 }: PageOptions): Promise<PageManager> {
   try {
     const client = await CDP({ port });
     const { Page } = client;
