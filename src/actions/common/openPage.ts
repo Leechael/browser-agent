@@ -127,9 +127,7 @@ async function setupNetworkMonitoring(client: Client) {
   Network.loadingFailed(({ requestId, errorText }) => {
     const pending = pendingRequests.get(requestId);
     if (pending) {
-      console.warn(`XHR request failed for ${pending.url}:`, errorText);
       pendingRequests.delete(requestId);
-      console.log('b', Array.from(pendingRequests.entries()))
       if (pendingRequests.size === 0) {
         pendingAllLoadSubject.next(loadingFinishedSymbol)
       }
