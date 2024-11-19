@@ -2,7 +2,37 @@
 
 This is an experiemental project that exposes an x.com account as API, it need you run Chrome with CDP enabled and login the x.com account first.
 
-## Environment Configuration
+## API Endpoints
+
+### GET /home_timeline
+Retrieves the home timeline tweets.
+
+### GET /user/:screen_name
+Retrieves tweets from a specific user's timeline.
+- `:screen_name` - The Twitter screen name of the user
+
+### GET /mentions
+Retrieves mentions for the authenticated user.
+
+### GET /user/:screen_name/:tweet_id
+Retrieves a specific tweet.
+- `:screen_name` - The Twitter screen name of the user
+- `:tweet_id` - The ID of the tweet
+
+### GET /user/:screen_name/status/:tweet_id
+Alternative endpoint to retrieve a specific tweet.
+- `:screen_name` - The Twitter screen name of the user
+- `:tweet_id` - The ID of the tweet
+
+### POST /tweets
+Posts a new tweet.
+- Request body: `{ "text": "Your tweet content here" }`
+
+## Running the Server
+
+The server runs on port 3000 by default, or on the port specified by the `PORT` environment variable.
+
+## Advanced Environment Configuration
 
 The development environment can be customized through a `.env` file in the project root. Below are the available configuration options:
 
