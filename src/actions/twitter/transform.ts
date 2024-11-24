@@ -52,7 +52,7 @@ export function extractTweet(tweet: any) {
     name: user.legacy.name
   }
   const is_retweeted = !!legacy.retweeted_status_result
-  const is_quoted = !!tweet.quoted_status_result
+  const is_quoted = !!tweet.quoted_status_result || !!(tweet?.legacy?.is_quote_status)
   const is_article = !!tweet.article
 
   const ret: any = {
@@ -85,7 +85,7 @@ export function extractTweet(tweet: any) {
     ret.retweet_for = extractTweet(legacy.retweeted_status_result.result)
   }
 
-  if (is_quoted) {
+  if (is_quoted && tweet?.quoted_status_result) {
     ret.quote_for = extractTweet(tweet.quoted_status_result.result)
   }
 
@@ -123,10 +123,8 @@ export function extractTimeline(raw: any[]) {
           && entry.content?.metadata?.conversationMetadata
         ) {
           // TODO: entry.content.displayType === 'VerticalConversation'
-          console.log('is a thread')
           const mainTweet: any = extractTweet(entry.content.items[0].item.itemContent)
           mainTweet.conversationAllTweetIds = entry.content.metadata.conversationMetadata.allTweetIds
-          console.log('parsing conversations')
           mainTweet.conversations = entry.content.items.slice(1).map((i: any) => {
             return extractTweet(i.item.itemContent)
           })
