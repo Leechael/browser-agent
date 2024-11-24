@@ -13,15 +13,29 @@ export async function readTweet({ screen_name, tweet_id, ...options }: ReadTweet
   try {
     const resp = await firstValueFrom(xhr$.pipe(matchedUrl('TweetDetail')))
     const body = await resp.json()
-    const matched1 = (body?.data?.threaded_conversation_with_injections_v2?.instructions || []).filter((i: any) => i.type === 'TimelineAddEntries')
-    const entries = (matched1[0] || { entries: [] }).entries || []
-    const matched2 = entries.filter((i: any) => i.entryId.startsWith('tweet-'))
-    if (matched2.length) {
-      const tweet = extractTweet(matched2[0]?.content?.itemContent?.tweet_results?.result)
-      // Try find out self-thread
-      const selfThread = entries.find((i: any) => i?.content?.displayType === 'VerticalConversation' && i?.content.items[0]?.item?.itemContent?.tweetDisplayType === 'SelfThread')
-      const threads = (selfThread?.content?.items || []).map((i: any) => extractTweet(i.item?.itemContent?.tweet_results?.result))
-      tweet.threads = threads
+    const instructions = (body?.data?.threaded_conversation_with_injections_v2?.instructions || []).filter((i: any) => i.type === 'TimelineAddEntries')
+    const entries = (instructions[0] || { entries: [] }).entries || []
+    const tweetEntries = entries.filter((i: any) => i.entryId.startsWith('tweet-'))
+    if (tweetEntries.length) {
+      let tweet
+      // For must of case, the target tweet should be the first matched item, unless in conversation mode, which is a reply to the original tweet.
+      // To adjusting this scenario, let's try matched by full entryId first.
+      const probablyReply = tweetEntries.find((i: any) => i?.entryId === `tweet-${tweet_id}`)
+      if (probablyReply) {
+        tweet = extractTweet(probablyReply?.content?.itemContent?.tweet_results?.result)
+        const threads = tweetEntries
+          .filter((i: any) => i?.entryId !== `tweet-${tweet_id}`)
+          .map((i: any) => extractTweet(i.content?.itemContent?.tweet_results?.result))
+        const selfThread = entries.find((i: any) => i?.content?.displayType === 'VerticalConversation' && i?.content.items[0]?.item?.itemContent?.tweetDisplayType === 'SelfThread')
+        const followUps = (selfThread?.content?.items || []).map((i: any) => extractTweet(i.item?.itemContent?.tweet_results?.result))
+        tweet.threads = threads.concat(followUps)
+      } else {
+        tweet = extractTweet(tweetEntries[0]?.content?.itemContent?.tweet_results?.result)
+        // Try find out self-thread
+        const selfThread = entries.find((i: any) => i?.content?.displayType === 'VerticalConversation' && i?.content.items[0]?.item?.itemContent?.tweetDisplayType === 'SelfThread')
+        const threads = (selfThread?.content?.items || []).map((i: any) => extractTweet(i.item?.itemContent?.tweet_results?.result))
+        tweet.threads = threads
+      }
       return tweet
     }
   } catch (err) {
