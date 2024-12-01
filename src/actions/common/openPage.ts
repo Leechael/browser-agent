@@ -144,11 +144,31 @@ async function setupNetworkMonitoring(client: Client) {
 
 export async function openPage({ url, port = Number(process.env.CHROME_PORT) || 9222 }: PageOptions): Promise<PageManager> {
   try {
-    const client = await CDP({ port });
+    const targets = await CDP.List()
+    if (targets.length === 0) {
+      await CDP.New({ url: 'about:blank' })
+    }
+    let client = await CDP({ port });
+    try {
+        await Promise.race([
+          client.Page.enable(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 100))
+        ]);
+    } catch (error) {
+      const resp = await client.Target.getTargetInfo()
+      await client.Target.closeTarget({ targetId: resp.targetInfo.targetId })
+      const targets = await CDP.List()
+      if (targets.length === 0) {
+        await CDP.New({ url: 'about:blank' })
+      }
+      client = await CDP({ port })
+      await client.Page.enable()
+    }
+
     const { Page } = client;
-    await Page.enable();
+
     const xhrStream = await setupNetworkMonitoring(client);
-    
+
     await Page.navigate({ url });
     await Page.loadEventFired();
     
