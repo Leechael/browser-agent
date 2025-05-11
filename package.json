@@ -3,7 +3,8 @@
   "module": "index.ts",
   "type": "module",
   "scripts": {
-    "dev": "tsx dev.ts"
+    "dev": "tsx dev.ts",
+    "postinstall": "cd node_modules/hono-mcp-server-sse-transport && pnpm install && pnpm build || true"
   },
   "devDependencies": {
     "@types/chrome-remote-interface": "^0.31.14",
@@ -14,8 +15,12 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.4",
+    "@modelcontextprotocol/sdk": "^1.11.1",
     "chrome-remote-interface": "^0.33.2",
+    "fetch-to-node": "^2.1.0",
     "hono": "^4.6.8",
+    "hono-mcp-server-sse-transport": "Leechael/hono-mcp-server-sse-transport#fix-handshake",
     "rxjs": "^7.8.1"
-  }
+  },
+  "packageManager": "pnpm@8.9.2+sha1.5f2fa48d614263457cf5d7fb7be8b878da318d87"
 }
