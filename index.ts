@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { logger } from 'hono/logger'
 import { serve } from '@hono/node-server'
 
+import { openPage } from '@/actions/common/openPage'
 import { readHomeTimeline, readUserTimeline, readMentions, readTweet, postTweet } from '@/actions/twitter'
 
 const app = new Hono()
@@ -39,6 +40,11 @@ app.get('/user/:screen_name/status/:tweet_id', async (ctx) => {
 app.post('/tweets', async (ctx) => {
   const { text } = await ctx.req.json()
   await postTweet({ text: text as string })
+  return ctx.json({ "success": true })
+})
+
+app.get('/reset', async (ctx) => {
+  await openPage({ url: 'about:blank' })
   return ctx.json({ "success": true })
 })
 
