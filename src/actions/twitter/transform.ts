@@ -43,13 +43,14 @@ export function extractTweet(tweet: any) {
     tweet = tweet.tweet
   }
   // const tweet = tweetData.tweet_results ? tweetData.tweet_results.result : tweetData
+  // NOTE: 2025-06-04: `legacy` means it will be removed any time.
   const user = tweet.core.user_results.result
   const legacy = tweet.legacy
 
   const author = {
     user_id: user.rest_id,
-    username: user.legacy.screen_name,
-    name: user.legacy.name
+    username: user.core.screen_name,
+    name: user.core.name
   }
   const is_retweeted = !!legacy.retweeted_status_result
   const is_quoted = !!tweet.quoted_status_result || !!(tweet?.legacy?.is_quote_status)
