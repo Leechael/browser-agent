@@ -502,6 +502,291 @@ app.post('/cookies/:domain', async (ctx) => {
   }
 })
 
+// Clear browser data route
+app.delete('/clear/:domain?', async (ctx) => {
+  const requestStartTime = Date.now()
+  const domain = ctx.req.param('domain') // Optional domain parameter
+  
+  console.log(`[${new Date().toISOString()}] DELETE clear request${domain ? ` for domain: ${domain}` : ' (all data)'}`)
+  
+  // Get clear options from query parameters
+  const clearCookies = ctx.req.query('cookies') !== 'false' // Default true
+  const clearLocalStorage = ctx.req.query('localStorage') !== 'false' // Default true
+  const clearSessionStorage = ctx.req.query('sessionStorage') !== 'false' // Default true
+  const clearIndexedDB = ctx.req.query('indexedDB') !== 'false' // Default true
+  const clearCache = ctx.req.query('cache') !== 'false' // Default true
+  const clearAll = ctx.req.query('all') === 'true' // Clear all browser data
+
+  const { client } = await openPage({ url: 'about:blank' })
+  const { Network, Storage } = client
+
+  try {
+    const startTime = Date.now()
+    console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Enabling domains...`)
+    
+    await Network.enable()
+    console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Domains enabled`)
+
+    const results: Record<string, any> = {}
+
+    if (clearAll || clearCookies) {
+      try {
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Clearing browser cookies...`)
+        await Network.clearBrowserCookies()
+        results.cookies = { success: true, action: 'cleared_all_cookies' }
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Browser cookies cleared`)
+      } catch (error) {
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Failed to clear cookies:`, error)
+        results.cookies = { 
+          success: false, 
+          error: error instanceof Error ? error.message : String(error) 
+        }
+      }
+    }
+
+    if (clearAll || clearCache) {
+      try {
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Clearing browser cache...`)
+        await Network.clearBrowserCache()
+        results.cache = { success: true, action: 'cleared_browser_cache' }
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Browser cache cleared`)
+      } catch (error) {
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Failed to clear cache:`, error)
+        results.cache = { 
+          success: false, 
+          error: error instanceof Error ? error.message : String(error) 
+        }
+      }
+    }
+
+    // If domain is specified, clear storage data for that domain
+    if (domain && (clearAll || clearLocalStorage || clearSessionStorage || clearIndexedDB)) {
+      const origins = [`https://${domain}`, `http://${domain}`]
+      
+      for (const origin of origins) {
+        try {
+          console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Clearing storage data for origin:`, origin)
+          
+          // Determine which storage types to clear
+          const storageTypes: string[] = []
+          if (clearAll || clearLocalStorage) storageTypes.push('local_storage')
+          if (clearAll || clearSessionStorage) storageTypes.push('session_storage')
+          if (clearAll || clearIndexedDB) storageTypes.push('indexeddb')
+          if (clearAll || clearCookies) storageTypes.push('cookies')
+          if (clearAll || clearCache) storageTypes.push('cache_storage')
+
+          if (Storage.clearDataForOrigin) {
+            await Storage.clearDataForOrigin({
+              origin: origin,
+              storageTypes: storageTypes.join(',')
+            })
+            
+            results[origin] = { 
+              success: true, 
+              action: 'cleared_origin_data',
+              storageTypes: storageTypes
+            }
+            console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Storage data cleared for ${origin}`)
+          } else {
+            results[origin] = { 
+              success: false, 
+              error: 'Storage.clearDataForOrigin not available'
+            }
+          }
+        } catch (error) {
+          console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Failed to clear storage for ${origin}:`, error)
+          results[origin] = { 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          }
+        }
+      }
+    }
+
+    const totalOperations = Object.keys(results).length
+    const successfulOperations = Object.values(results).filter((r: any) => r.success).length
+
+    console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Clear operations completed: ${successfulOperations}/${totalOperations} successful`)
+
+    return ctx.json({
+      success: true,
+      domain: domain || 'all',
+      operations: {
+        clearCookies,
+        clearLocalStorage,
+        clearSessionStorage,
+        clearIndexedDB,
+        clearCache,
+        clearAll
+      },
+      results: results,
+      summary: {
+        total: totalOperations,
+        successful: successfulOperations,
+        failed: totalOperations - successfulOperations
+      },
+      processingTime: Date.now() - startTime,
+      totalTime: Date.now() - requestStartTime
+    })
+  } catch (e) {
+    console.error(`[${new Date().toISOString()}] Error in clear handler:`, e)
+    const errorMessage = e instanceof Error ? e.message : String(e)
+    return ctx.json({
+      error: errorMessage,
+      success: false,
+      totalTime: Date.now() - requestStartTime
+    }, 500)
+  } finally {
+    console.log(`[${new Date().toISOString()}] Closing client...`)
+    await client.close()
+    console.log(`[${new Date().toISOString()}] Client closed, total request time: ${Date.now() - requestStartTime}ms`)
+  }
+})
+
+// POST variant for clear operation (alternative to DELETE)
+app.post('/clear/:domain?', async (ctx) => {
+  const requestStartTime = Date.now()
+  const domain = ctx.req.param('domain')
+  
+  console.log(`[${new Date().toISOString()}] POST clear request${domain ? ` for domain: ${domain}` : ' (all data)'}`)
+  
+  try {
+    const body = await ctx.req.json()
+    const { 
+      cookies = true,
+      localStorage = true,
+      sessionStorage = true,
+      indexedDB = true,
+      cache = true,
+      all = false
+    } = body as {
+      cookies?: boolean
+      localStorage?: boolean
+      sessionStorage?: boolean
+      indexedDB?: boolean
+      cache?: boolean
+      all?: boolean
+    }
+
+    const { client } = await openPage({ url: 'about:blank' })
+    const { Network, Storage } = client
+
+    try {
+      const startTime = Date.now()
+      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Enabling domains...`)
+      
+      await Network.enable()
+      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Domains enabled`)
+
+      const results: Record<string, any> = {}
+
+      if (all || cookies) {
+        try {
+          console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Clearing browser cookies...`)
+          await Network.clearBrowserCookies()
+          results.cookies = { success: true, action: 'cleared_all_cookies' }
+        } catch (error) {
+          results.cookies = { 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          }
+        }
+      }
+
+      if (all || cache) {
+        try {
+          console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Clearing browser cache...`)
+          await Network.clearBrowserCache()
+          results.cache = { success: true, action: 'cleared_browser_cache' }
+        } catch (error) {
+          results.cache = { 
+            success: false, 
+            error: error instanceof Error ? error.message : String(error) 
+          }
+        }
+      }
+
+      if (domain && (all || localStorage || sessionStorage || indexedDB)) {
+        const origins = [`https://${domain}`, `http://${domain}`]
+        
+        for (const origin of origins) {
+          try {
+            const storageTypes: string[] = []
+            if (all || localStorage) storageTypes.push('local_storage')
+            if (all || sessionStorage) storageTypes.push('session_storage')
+            if (all || indexedDB) storageTypes.push('indexeddb')
+            if (all || cookies) storageTypes.push('cookies')
+            if (all || cache) storageTypes.push('cache_storage')
+
+            if (Storage.clearDataForOrigin) {
+              await Storage.clearDataForOrigin({
+                origin: origin,
+                storageTypes: storageTypes.join(',')
+              })
+              
+              results[origin] = { 
+                success: true, 
+                action: 'cleared_origin_data',
+                storageTypes: storageTypes
+              }
+            } else {
+              results[origin] = { 
+                success: false, 
+                error: 'Storage.clearDataForOrigin not available'
+              }
+            }
+          } catch (error) {
+            results[origin] = { 
+              success: false, 
+              error: error instanceof Error ? error.message : String(error) 
+            }
+          }
+        }
+      }
+
+      const totalOperations = Object.keys(results).length
+      const successfulOperations = Object.values(results).filter((r: any) => r.success).length
+
+      return ctx.json({
+        success: true,
+        domain: domain || 'all',
+        operations: {
+          cookies,
+          localStorage,
+          sessionStorage,
+          indexedDB,
+          cache,
+          all
+        },
+        results: results,
+        summary: {
+          total: totalOperations,
+          successful: successfulOperations,
+          failed: totalOperations - successfulOperations
+        },
+        processingTime: Date.now() - startTime,
+        totalTime: Date.now() - requestStartTime
+      })
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Error in clear POST handler:`, e)
+      const errorMessage = e instanceof Error ? e.message : String(e)
+      return ctx.json({
+        error: errorMessage,
+        success: false,
+        totalTime: Date.now() - requestStartTime
+      }, 500)
+    } finally {
+      await client.close()
+    }
+  } catch (parseError) {
+    console.error(`[${new Date().toISOString()}] Failed to parse POST body:`, parseError)
+    return ctx.json({
+      error: 'Invalid JSON in request body',
+      success: false
+    }, 400)
+  }
+})
+
 const transports: Record<string, SSETransport> = {}
 const server = createMcpServer()
 
