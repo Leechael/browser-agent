@@ -228,7 +228,7 @@ app.get('/page/*', async (ctx) => {
   }
   
   // Convert single selector to selectors format, or empty for full page
-  const selectors = selector ? { result: selector } : {}
+  const selectors: Record<string, string> = selector ? { result: selector } : {}
   const result = await processPage(url, selectors)
   
   if (result.isError) {
@@ -343,7 +343,7 @@ app.post('/messages', async (c) => {
     return c.text('No transport found for sessionId', 400);
   }
 
-  return await transport.handlePostMessage(c);
+  return await transport.handlePostMessage(c as any);
 });
 
 app.post("/mcp", async (c) => {
