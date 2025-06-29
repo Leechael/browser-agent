@@ -92,23 +92,9 @@ app.post('/tweets', async (ctx) => {
   return ctx.json({ "success": true })
 })
 
-app.get('/page/*', async (ctx) => {
+// Helper function to process page and extract content
+async function processPage(url: string, selectors: Record<string, string>, timeoutSeconds = 10) {
   const requestStartTime = Date.now()
-  console.log(`[${new Date().toISOString()}] Request received for page endpoint`)
-  
-  const path = ctx.req.path.split('/page/')[1]
-  const selector = ctx.req.query('__selector__')
-  
-  // Remove __selector__ from query string
-  const searchParams = new URLSearchParams(ctx.req.url.split('?')[1] || '')
-  searchParams.delete('__selector__')
-  const queryString = searchParams.toString()
-
-  let url = `https://${path}`
-  if (queryString) {
-    url += `?${queryString}` 
-  }
-  
   console.log(`[${new Date().toISOString()}] Opening page:`, url)
   const openPageStart = Date.now()
   const { client } = await openPage({ url })
@@ -137,45 +123,10 @@ app.get('/page/*', async (ctx) => {
       ])
     ])
     console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Domains enabled`)
-    
-    if (selector) {
-      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Selector provided:`, selector)
-      
-      // Use waitForElement to wait for the specific element
-      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Waiting for element...`)
-      try {
-        await waitForElement(client, selector, 10000) // 10 second timeout
-        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Element found, getting HTML...`)
-        
-        const { root: { nodeId } } = await DOM.getDocument()
-        const { nodeIds } = await DOM.querySelectorAll({ nodeId, selector })
-        
-        if (nodeIds.length > 0) {
-          const { outerHTML } = await DOM.getOuterHTML({ nodeId: nodeIds[0] })
-          console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] HTML extraction success, length:`, outerHTML.length)
-          
-          return ctx.json({ 
-            success: true,
-            html: outerHTML,
-            nodeId: nodeIds[0],
-            selector: selector,
-            length: outerHTML.length,
-            processingTime: Date.now() - startTime,
-            totalTime: Date.now() - requestStartTime
-          })
-        }
-      } catch (waitError) {
-        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] waitForElement failed:`, waitError)
-        return ctx.json({ 
-          error: 'Element not found within timeout',
-          selector: selector,
-          processingTime: Date.now() - startTime,
-          totalTime: Date.now() - requestStartTime
-        }, 404)
-      }
-    } else {
-      // No selector - return full page HTML
-      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] No selector provided, getting full page HTML...`)
+
+    // Check if this is full page request (empty selectors)
+    if (Object.keys(selectors).length === 0) {
+      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] No selectors provided, getting full page HTML...`)
       
       // Wait a bit for page to fully load
       await new Promise(resolve => setTimeout(resolve, 2000))
@@ -187,33 +138,172 @@ app.get('/page/*', async (ctx) => {
       
       console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Full page HTML retrieved, length:`, result.value.length)
       
-      return ctx.json({ 
+      return { 
         success: true,
         html: result.value,
         fullPage: true,
         length: result.value.length,
         processingTime: Date.now() - startTime,
         totalTime: Date.now() - requestStartTime
-      })
+      }
     }
-
-    return ctx.json({ 
-      error: 'Unknown error',
+    
+    // Process selectors
+    console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Processing selectors:`, Object.keys(selectors))
+    
+    const { root: { nodeId } } = await DOM.getDocument()
+    const results: Record<string, any> = {}
+    
+    // Process each selector
+    for (const [keyName, selector] of Object.entries(selectors)) {
+      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Processing selector "${keyName}": ${selector}`)
+      
+      try {
+        await waitForElement(client, selector, timeoutSeconds * 1000)
+        const { nodeIds } = await DOM.querySelectorAll({ nodeId, selector })
+        
+        if (nodeIds.length > 0) {
+          const { outerHTML } = await DOM.getOuterHTML({ nodeId: nodeIds[0] })
+          results[keyName] = {
+            success: true,
+            html: outerHTML,
+            nodeId: nodeIds[0],
+            selector: selector,
+            length: outerHTML.length
+          }
+          console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Selector "${keyName}" success, length:`, outerHTML.length)
+        } else {
+          results[keyName] = {
+            success: false,
+            error: 'Element found but no nodeIds returned',
+            selector: selector
+          }
+        }
+      } catch (error) {
+        results[keyName] = {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          selector: selector
+        }
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Selector "${keyName}" failed:`, error)
+      }
+    }
+    
+    return {
+      success: true,
+      results: results,
       processingTime: Date.now() - startTime,
       totalTime: Date.now() - requestStartTime
-    }, 500)
+    }
   } catch (e) {
-    console.error(`[${new Date().toISOString()}] Error in page handler:`, e)
+    console.error(`[${new Date().toISOString()}] Error in page processing:`, e)
     const errorMessage = e instanceof Error ? e.message : String(e)
-    return ctx.json({
+    return {
       error: errorMessage,
       success: false,
-      totalTime: Date.now() - requestStartTime
-    }, 500)
+      totalTime: Date.now() - requestStartTime,
+      isError: true
+    }
   } finally {
     console.log(`[${new Date().toISOString()}] Closing client...`)
     await client.close()
     console.log(`[${new Date().toISOString()}] Client closed, total request time: ${Date.now() - requestStartTime}ms`)
+  }
+}
+
+app.get('/page/*', async (ctx) => {
+  console.log(`[${new Date().toISOString()}] GET request received for page endpoint`)
+  
+  const path = ctx.req.path.split('/page/')[1]
+  const selector = ctx.req.query('__selector__')
+  
+  // Remove __selector__ from query string
+  const searchParams = new URLSearchParams(ctx.req.url.split('?')[1] || '')
+  searchParams.delete('__selector__')
+  const queryString = searchParams.toString()
+
+  let url = `https://${path}`
+  if (queryString) {
+    url += `?${queryString}` 
+  }
+  
+  // Convert single selector to selectors format, or empty for full page
+  const selectors = selector ? { result: selector } : {}
+  const result = await processPage(url, selectors)
+  
+  if (result.isError) {
+    return ctx.json({ error: result.error, success: false }, 500)
+  }
+  
+  // For single selector (GET), extract the result from results
+  if (selector && result.results?.result) {
+    const singleResult = result.results.result
+    if (!singleResult.success) {
+      return ctx.json({
+        error: singleResult.error,
+        selector: selector,
+        processingTime: result.processingTime,
+        totalTime: result.totalTime
+      }, 404)
+    }
+    
+    return ctx.json({
+      success: true,
+      html: singleResult.html,
+      nodeId: singleResult.nodeId,
+      selector: selector,
+      length: singleResult.length,
+      processingTime: result.processingTime,
+      totalTime: result.totalTime
+    })
+  }
+  
+  return ctx.json(result)
+})
+
+app.post('/page/*', async (ctx) => {
+  console.log(`[${new Date().toISOString()}] POST request received for page endpoint`)
+  
+  const path = ctx.req.path.split('/page/')[1]
+  
+  // Remove query string for POST
+  const searchParams = new URLSearchParams(ctx.req.url.split('?')[1] || '')
+  const queryString = searchParams.toString()
+
+  let url = `https://${path}`
+  if (queryString) {
+    url += `?${queryString}` 
+  }
+  
+  try {
+    const body = await ctx.req.json()
+    const { selectors, timeout = 10 } = body as { 
+      selectors?: Record<string, string>, 
+      timeout?: number 
+    }
+    
+    if (!selectors || typeof selectors !== 'object') {
+      return ctx.json({
+        error: 'Invalid request body. Expected: { selectors: Record<string, string>, timeout?: number }',
+        success: false
+      }, 400)
+    }
+    
+    console.log(`[${new Date().toISOString()}] POST selectors:`, Object.keys(selectors), 'timeout:', timeout)
+    
+    const result = await processPage(url, selectors, timeout)
+    
+    if (result.isError) {
+      return ctx.json({ error: result.error, success: false }, 500)
+    }
+    
+    return ctx.json(result)
+  } catch (parseError) {
+    console.error(`[${new Date().toISOString()}] Failed to parse POST body:`, parseError)
+    return ctx.json({
+      error: 'Invalid JSON in request body',
+      success: false
+    }, 400)
   }
 })
 
