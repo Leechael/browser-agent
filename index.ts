@@ -312,6 +312,196 @@ app.get('/reset', async (ctx) => {
   return ctx.json({ "success": true })
 })
 
+// Cookie management routes
+app.get('/cookies/:domain', async (ctx) => {
+  const requestStartTime = Date.now()
+  console.log(`[${new Date().toISOString()}] GET cookies request for domain:`, ctx.req.param('domain'))
+  
+  const domain = ctx.req.param('domain')
+  const urls = ctx.req.query('urls') // Optional: specific URLs to get cookies for
+  
+  let urlList: string[] = []
+  if (urls) {
+    urlList = urls.split(',').map(url => url.trim())
+  } else {
+    // Default to domain with both http and https
+    urlList = [`https://${domain}`, `http://${domain}`]
+  }
+
+  const { client } = await openPage({ url: 'about:blank' })
+  const { Network } = client
+
+  try {
+    const startTime = Date.now()
+    console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Enabling Network domain...`)
+    
+    await Network.enable()
+    console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Network domain enabled`)
+
+    const cookieResults: Record<string, any> = {}
+    
+    for (const url of urlList) {
+      try {
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Getting cookies for URL:`, url)
+        const { cookies } = await Network.getCookies({ urls: [url] })
+        cookieResults[url] = {
+          success: true,
+          cookies: cookies,
+          count: cookies.length
+        }
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Found ${cookies.length} cookies for ${url}`)
+      } catch (error) {
+        console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Failed to get cookies for ${url}:`, error)
+        cookieResults[url] = {
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          cookies: []
+        }
+      }
+    }
+
+    return ctx.json({
+      success: true,
+      domain: domain,
+      results: cookieResults,
+      processingTime: Date.now() - startTime,
+      totalTime: Date.now() - requestStartTime
+    })
+  } catch (e) {
+    console.error(`[${new Date().toISOString()}] Error in cookies GET handler:`, e)
+    const errorMessage = e instanceof Error ? e.message : String(e)
+    return ctx.json({
+      error: errorMessage,
+      success: false,
+      totalTime: Date.now() - requestStartTime
+    }, 500)
+  } finally {
+    console.log(`[${new Date().toISOString()}] Closing client...`)
+    await client.close()
+    console.log(`[${new Date().toISOString()}] Client closed, total request time: ${Date.now() - requestStartTime}ms`)
+  }
+})
+
+app.post('/cookies/:domain', async (ctx) => {
+  const requestStartTime = Date.now()
+  console.log(`[${new Date().toISOString()}] POST cookies request for domain:`, ctx.req.param('domain'))
+  
+  const domain = ctx.req.param('domain')
+  
+  try {
+    const body = await ctx.req.json()
+    const { cookies, action = 'set' } = body as { 
+      cookies: Array<{
+        name: string
+        value: string
+        domain?: string
+        path?: string
+        secure?: boolean
+        httpOnly?: boolean
+        expires?: number
+        sameSite?: 'Strict' | 'Lax' | 'None'
+      }>, 
+      action?: 'set' | 'delete'
+    }
+    
+    if (!cookies || !Array.isArray(cookies)) {
+      return ctx.json({
+        error: 'Invalid request body. Expected: { cookies: Array<Cookie>, action?: "set" | "delete" }',
+        success: false
+      }, 400)
+    }
+    
+    console.log(`[${new Date().toISOString()}] ${action} ${cookies.length} cookies for domain:`, domain)
+
+    const { client } = await openPage({ url: 'about:blank' })
+    const { Network } = client
+
+    try {
+      const startTime = Date.now()
+      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Enabling Network domain...`)
+      
+      await Network.enable()
+      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Network domain enabled`)
+
+      const results: Array<any> = []
+      
+      for (const cookie of cookies) {
+        try {
+          // Set default domain if not provided
+          const cookieToProcess = {
+            ...cookie,
+            domain: cookie.domain || domain
+          }
+          
+          if (action === 'set') {
+            console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Setting cookie:`, cookieToProcess.name)
+            const result = await Network.setCookie(cookieToProcess)
+            results.push({
+              success: result.success,
+              cookie: cookieToProcess,
+              error: result.success ? null : 'Failed to set cookie'
+            })
+          } else if (action === 'delete') {
+            console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Deleting cookie:`, cookieToProcess.name)
+            await Network.deleteCookies({
+              name: cookieToProcess.name,
+              domain: cookieToProcess.domain,
+              path: cookieToProcess.path
+            })
+            results.push({
+              success: true,
+              cookie: cookieToProcess,
+              action: 'deleted'
+            })
+          }
+        } catch (error) {
+          console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] Failed to ${action} cookie ${cookie.name}:`, error)
+          results.push({
+            success: false,
+            cookie: cookie,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
+      }
+
+      const successCount = results.filter(r => r.success).length
+      console.log(`[${new Date().toISOString()}] [+${Date.now() - startTime}ms] ${action} completed: ${successCount}/${cookies.length} successful`)
+
+      return ctx.json({
+        success: true,
+        domain: domain,
+        action: action,
+        results: results,
+        summary: {
+          total: cookies.length,
+          successful: successCount,
+          failed: cookies.length - successCount
+        },
+        processingTime: Date.now() - startTime,
+        totalTime: Date.now() - requestStartTime
+      })
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Error in cookies POST handler:`, e)
+      const errorMessage = e instanceof Error ? e.message : String(e)
+      return ctx.json({
+        error: errorMessage,
+        success: false,
+        totalTime: Date.now() - requestStartTime
+      }, 500)
+    } finally {
+      console.log(`[${new Date().toISOString()}] Closing client...`)
+      await client.close()
+      console.log(`[${new Date().toISOString()}] Client closed, total request time: ${Date.now() - requestStartTime}ms`)
+    }
+  } catch (parseError) {
+    console.error(`[${new Date().toISOString()}] Failed to parse POST body:`, parseError)
+    return ctx.json({
+      error: 'Invalid JSON in request body',
+      success: false
+    }, 400)
+  }
+})
+
 const transports: Record<string, SSETransport> = {}
 const server = createMcpServer()
 
