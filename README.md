@@ -28,6 +28,78 @@ Alternative endpoint to retrieve a specific tweet.
 Posts a new tweet.
 - Request body: `{ "text": "Your tweet content here" }`
 
+### GET /cookies/:domain
+Retrieves cookies for a specific domain.
+- `:domain` - The domain to get cookies for (e.g., `x.com`)
+- Query parameters:
+  - `urls` (optional) - Comma-separated list of specific URLs to get cookies for
+
+### POST /cookies/:domain
+Sets cookies for a specific domain.
+- `:domain` - The domain to set cookies for
+- Request body (JSON):
+  ```json
+  {
+    "cookies": [
+      { "name": "cookie_name", "value": "cookie_value", "path": "/", "secure": true }
+    ]
+  }
+  ```
+- Or raw cookie string (Content-Type: `text/plain`):
+  ```
+  cookie1=value1; cookie2=value2
+  ```
+
+### DELETE /clear/:domain?
+Clears browser data (cookies, cache, storage).
+- `:domain` (optional) - Specific domain to clear data for. If omitted, clears all data.
+- Query parameters (all default to `true`):
+  - `cookies` - Clear cookies
+  - `localStorage` - Clear local storage
+  - `sessionStorage` - Clear session storage
+  - `indexedDB` - Clear IndexedDB
+  - `cache` - Clear browser cache
+  - `all` - Clear all data types
+
+### POST /clear/:domain?
+Alternative to DELETE for clearing browser data.
+- Request body:
+  ```json
+  {
+    "cookies": true,
+    "localStorage": true,
+    "sessionStorage": true,
+    "indexedDB": true,
+    "cache": true,
+    "all": false
+  }
+  ```
+
+## Timeout Configuration
+
+The server implements a multi-layer timeout system to prevent hanging requests:
+
+### API Layer (HTTP)
+- **Timeout**: 120 seconds
+- **Response**: HTTP 504 with message "Request timeout - the operation took too long"
+- **Excluded routes**: `/sse`, `/mcp`, `/messages` (streaming endpoints)
+
+### Browser Operation Timeouts
+All timeouts are configurable via `TimeoutConfig`:
+
+| Phase | Default | Error Type |
+|-------|---------|------------|
+| CDP Connection | 5000ms | `CDPConnectionTimeoutError` |
+| Page Enable | 100ms | `PageEnableTimeoutError` |
+| Page Navigation | 30000ms | `PageNavigationTimeoutError` |
+| Page Load | 30000ms | `PageLoadTimeoutError` |
+| XHR Wait | 30000ms | `XhrWaitTimeoutError` |
+| Idle Detection | 3000ms | `PageLoadedWithoutMatchError` |
+
+### Session Expiry Detection
+When accessing Twitter endpoints, if the page loads but the expected API request is not detected (indicating session expiry), the server returns:
+- **HTTP 403** with `{ "error": "session_expired", "message": "Twitter session expired, please re-login" }`
+
 ## Running the Server
 
 The server runs on port 3000 by default, or on the port specified by the `PORT` environment variable.
