@@ -382,31 +382,94 @@ app.get('/cookies/:domain', async (ctx) => {
   }
 })
 
+// Parse raw cookie string like "name1=value1; name2=value2" into array
+function parseCookieString(cookieStr: string): Array<{ name: string; value: string }> {
+  const cookies: Array<{ name: string; value: string }> = []
+
+  // Split by semicolon, handle both "; " and ";"
+  const parts = cookieStr.split(/;\s*/)
+
+  for (const part of parts) {
+    const trimmed = part.trim()
+    if (!trimmed) continue
+
+    // Find first = to split name and value (value may contain =)
+    const eqIndex = trimmed.indexOf('=')
+    if (eqIndex === -1) continue
+
+    const name = trimmed.substring(0, eqIndex).trim()
+    let value = trimmed.substring(eqIndex + 1).trim()
+
+    // Remove surrounding quotes if present
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+
+    if (name) {
+      cookies.push({ name, value })
+    }
+  }
+
+  return cookies
+}
+
 app.post('/cookies/:domain', async (ctx) => {
   const requestStartTime = Date.now()
   console.log(`[${new Date().toISOString()}] POST cookies request for domain:`, ctx.req.param('domain'))
-  
+
   const domain = ctx.req.param('domain')
-  
+
   try {
-    const body = await ctx.req.json()
-    const { cookies, action = 'set' } = body as { 
-      cookies: Array<{
-        name: string
-        value: string
-        domain?: string
-        path?: string
-        secure?: boolean
-        httpOnly?: boolean
-        expires?: number
-        sameSite?: 'Strict' | 'Lax' | 'None'
-      }>, 
-      action?: 'set' | 'delete'
+    const contentType = ctx.req.header('content-type') || ''
+    let cookies: Array<{
+      name: string
+      value: string
+      domain?: string
+      path?: string
+      secure?: boolean
+      httpOnly?: boolean
+      expires?: number
+      sameSite?: 'Strict' | 'Lax' | 'None'
+    }>
+    let action: 'set' | 'delete' = 'set'
+
+    // Check if it's plain text (raw cookie string) or JSON
+    if (contentType.includes('text/plain') || contentType.includes('text/raw')) {
+      // Parse raw cookie string
+      const rawText = await ctx.req.text()
+      console.log(`[${new Date().toISOString()}] Parsing raw cookie string (length: ${rawText.length})`)
+      cookies = parseCookieString(rawText)
+      console.log(`[${new Date().toISOString()}] Parsed ${cookies.length} cookies from raw string`)
+    } else {
+      // Try to parse as JSON
+      const body = await ctx.req.json()
+
+      // Support both formats:
+      // 1. { cookies: [...], action: "set" }
+      // 2. { raw: "cookie string", action: "set" }
+      if (typeof body.raw === 'string') {
+        console.log(`[${new Date().toISOString()}] Parsing raw cookie string from JSON body`)
+        cookies = parseCookieString(body.raw)
+        console.log(`[${new Date().toISOString()}] Parsed ${cookies.length} cookies from raw string`)
+      } else if (Array.isArray(body.cookies)) {
+        cookies = body.cookies
+      } else if (Array.isArray(body)) {
+        // Direct array of cookies
+        cookies = body
+      } else {
+        return ctx.json({
+          error: 'Invalid request body. Expected: { cookies: Array<Cookie> } or { raw: "cookie string" } or plain text',
+          success: false
+        }, 400)
+      }
+
+      action = body.action || 'set'
     }
-    
-    if (!cookies || !Array.isArray(cookies)) {
+
+    if (!cookies || cookies.length === 0) {
       return ctx.json({
-        error: 'Invalid request body. Expected: { cookies: Array<Cookie>, action?: "set" | "delete" }',
+        error: 'No cookies found in request',
         success: false
       }, 400)
     }
