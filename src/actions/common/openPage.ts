@@ -1,6 +1,15 @@
 import CDP, { type Client } from 'chrome-remote-interface'
-import { Subject, Observable, merge, firstValueFrom, race, throwError, timer } from 'rxjs'
-import { filter, debounceTime, take, map, takeUntil } from 'rxjs/operators'
+import { Subject, Observable, merge } from 'rxjs'
+import { filter, debounceTime } from 'rxjs/operators'
+import {
+  type TimeoutConfig,
+  resolveTimeouts,
+  PageEnableTimeoutError,
+  PageNavigationTimeoutError,
+  PageLoadTimeoutError,
+  XhrWaitTimeoutError,
+  PageLoadedWithoutMatchError,
+} from './errors'
 
 export interface XhrResponse<T=any> {
   requestId: string;
@@ -18,14 +27,6 @@ export const pageIdleSymbol = Symbol('page-idle')
 export type StreamSignal = typeof loadingFinishedSymbol | typeof pageIdleSymbol
 export type ObservableXHR = Observable<XhrResponse | StreamSignal>;
 
-// Custom error for when page loaded but no matching XHR was found
-export class PageLoadedWithoutMatchError extends Error {
-  constructor(public pattern: string | RegExp) {
-    super(`Page loaded but no XHR matched pattern: ${pattern}`)
-    this.name = 'PageLoadedWithoutMatchError'
-  }
-}
-
 export interface PageManager {
   client: CDP.Client;
   xhr$: ObservableXHR;
@@ -34,6 +35,7 @@ export interface PageManager {
 export interface PageOptions {
   url: string;
   port?: number;
+  timeout?: TimeoutConfig;
 }
 
 export interface PendingRequest {
@@ -57,14 +59,15 @@ function getDomainFromUrl(url: string): string {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 interface NetworkMonitoringOptions {
-  idleTimeout?: number; // ms to wait before considering page idle (default: 3000)
+  idleTimeout: number;
+  signalDebounce: number;
 }
 
 async function setupNetworkMonitoring(
   client: Client,
-  options: NetworkMonitoringOptions = {}
+  options: NetworkMonitoringOptions
 ) {
-  const { idleTimeout = 3000 } = options;
+  const { idleTimeout, signalDebounce } = options;
   const pendingRequests = new Map<string, PendingRequest>();
   const { Network, Page } = client;
 
@@ -195,12 +198,14 @@ async function setupNetworkMonitoring(
   return merge(
     xhrSubject,
     signalSubject.pipe(
-      debounceTime(1000), // Reduced from 5000ms for faster idle detection
+      debounceTime(signalDebounce),
     ),
   )
 }
 
-export async function openPage({ url, port = Number(process.env.CHROME_PORT) || 9222 }: PageOptions): Promise<PageManager> {
+export async function openPage({ url, port = Number(process.env.CHROME_PORT) || 9222, timeout }: PageOptions): Promise<PageManager> {
+  const timeouts = resolveTimeouts(timeout);
+
   try {
     const targets = await CDP.List()
     if (targets.length === 0) {
@@ -210,9 +215,13 @@ export async function openPage({ url, port = Number(process.env.CHROME_PORT) || 
     try {
         await Promise.race([
           client.Page.enable(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 100))
+          new Promise((_, reject) => setTimeout(
+            () => reject(new PageEnableTimeoutError(timeouts.pageEnable)),
+            timeouts.pageEnable
+          ))
         ]);
     } catch (error) {
+      // If it's our timeout error, might need to retry
       const resp = await client.Target.getTargetInfo()
       await client.Target.closeTarget({ targetId: resp.targetInfo.targetId })
       const targets = await CDP.List()
@@ -225,18 +234,36 @@ export async function openPage({ url, port = Number(process.env.CHROME_PORT) || 
 
     const { Page } = client;
 
-    const xhrStream = await setupNetworkMonitoring(client);
+    const xhrStream = await setupNetworkMonitoring(client, {
+      idleTimeout: timeouts.idleDetection,
+      signalDebounce: timeouts.signalDebounce,
+    });
 
-    await Page.navigate({ url });
-    await Page.loadEventFired();
-    
+    // Navigate with timeout
+    await Promise.race([
+      Page.navigate({ url }),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new PageNavigationTimeoutError(timeouts.pageNavigation, url)),
+        timeouts.pageNavigation
+      ))
+    ]);
+
+    // Wait for page load with timeout
+    await Promise.race([
+      Page.loadEventFired(),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new PageLoadTimeoutError(timeouts.pageLoad, url)),
+        timeouts.pageLoad
+      ))
+    ]);
+
     return {
       client,
       xhr$: xhrStream,
     };
 
   } catch (err) {
-    console.error('Error in getOrCreateXPage:', err);
+    console.error('Error in openPage:', err);
     throw err;
   }
 }
@@ -259,9 +286,12 @@ export function matchedUrl(strOrRegex: string | RegExp) {
 /**
  * Wait for a matching XHR request or throw if page becomes idle without match.
  *
+ * @param xhr$ - Observable XHR stream from openPage
  * @param strOrRegex - String or RegExp to match against XHR URLs
  * @param timeoutMs - Maximum time to wait (default: 30000ms)
- * @returns Promise that resolves with matching XhrResponse or rejects with PageLoadedWithoutMatchError
+ * @returns Promise that resolves with matching XhrResponse or rejects with:
+ *   - PageLoadedWithoutMatchError: if page became idle without matching XHR
+ *   - XhrWaitTimeoutError: if timeout exceeded
  */
 export function waitForMatch(
   xhr$: ObservableXHR,
@@ -311,7 +341,7 @@ export function waitForMatch(
       if (!resolved) {
         resolved = true;
         subscription.unsubscribe();
-        reject(new Error(`Timeout waiting for XHR matching: ${strOrRegex}`));
+        reject(new XhrWaitTimeoutError(timeoutMs, strOrRegex));
       }
     }, timeoutMs);
   });

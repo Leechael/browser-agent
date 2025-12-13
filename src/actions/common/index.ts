@@ -2,7 +2,6 @@ export {
   openPage,
   matchedUrl,
   waitForMatch,
-  PageLoadedWithoutMatchError,
   loadingFinishedSymbol,
   pageIdleSymbol,
   type PageOptions,
@@ -10,6 +9,22 @@ export {
   type ObservableXHR,
   type StreamSignal,
 } from './openPage'
+
+export {
+  // Error classes
+  TimeoutError,
+  CDPConnectionTimeoutError,
+  PageEnableTimeoutError,
+  PageNavigationTimeoutError,
+  PageLoadTimeoutError,
+  XhrWaitTimeoutError,
+  PageLoadedWithoutMatchError,
+  // Config
+  type TimeoutConfig,
+  DEFAULT_TIMEOUTS,
+  resolveTimeouts,
+} from './errors'
+
 export { waitForElement } from './waitForElement'
 export { clickElement } from './clickElement'
 export { typeHumanLike } from './typeHumanLike'

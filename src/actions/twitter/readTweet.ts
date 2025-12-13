@@ -1,5 +1,5 @@
 // TODO ensure selected the 'Following' tab.
-import { type PageOptions, openPage, waitForMatch, PageLoadedWithoutMatchError } from '../common'
+import { type PageOptions, openPage, waitForMatch, PageLoadedWithoutMatchError, DEFAULT_TIMEOUTS } from '../common'
 import { extractTweet } from './transform'
 
 export class SessionExpiredError extends Error {
@@ -15,11 +15,12 @@ export type ReadTweetOptions = {
 } & Omit<PageOptions, 'url'>
 
 export async function readTweet({ screen_name, tweet_id, ...options }: ReadTweetOptions) {
+  const xhrWaitTimeout = options.timeout?.xhrWait ?? DEFAULT_TIMEOUTS.xhrWait
   const { client, xhr$ } = await openPage({ ...(options || {}), url: `https://x.com/${screen_name}/status/${tweet_id}` })
   try {
     let resp
     try {
-      resp = await waitForMatch(xhr$, 'TweetDetail', 30000)
+      resp = await waitForMatch(xhr$, 'TweetDetail', xhrWaitTimeout)
     } catch (err) {
       if (err instanceof PageLoadedWithoutMatchError) {
         throw new SessionExpiredError()

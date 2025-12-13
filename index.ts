@@ -10,7 +10,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { openPage } from '@/actions/common/openPage'
 import { waitForElement } from '@/actions/common/waitForElement'
-import { readHomeTimeline, readUserTimeline, readMentions, readTweet, postTweet } from '@/actions/twitter'
+import { readHomeTimeline, readUserTimeline, readMentions, readTweet, postTweet, SessionExpiredError } from '@/actions/twitter'
 
 
 function createMcpServer() {
@@ -34,20 +34,30 @@ function createMcpServer() {
       const screen_name = match[1]
       const tweet_id = match[2]
       console.log('Reading tweet', screen_name, tweet_id)
-      const tweet = await readTweet({ screen_name, tweet_id })
-      console.log('Tweet read')
-      let content = ""
-      if (tweet.article) {
-        content = tweet.article.map((block: any) => block.text).join("\n")
-      } else {
-        let lines = [tweet.text]
-        for (const thread of tweet.threads || []) {
-          lines.push(thread.text)
+      try {
+        const tweet = await readTweet({ screen_name, tweet_id })
+        console.log('Tweet read')
+        let content = ""
+        if (tweet.article) {
+          content = tweet.article.map((block: any) => block.text).join("\n")
+        } else {
+          let lines = [tweet.text]
+          for (const thread of tweet.threads || []) {
+            lines.push(thread.text)
+          }
+          content = lines.join("\n")
         }
-        content = lines.join("\n")
-      }
-      return {
-        content: [{ type: "text", text: content }]
+        return {
+          content: [{ type: "text", text: content }]
+        }
+      } catch (err) {
+        if (err instanceof SessionExpiredError) {
+          return {
+            content: [{ type: "text", text: `Error: ${err.message}` }],
+            isError: true
+          }
+        }
+        throw err
       }
     }
   );
@@ -76,14 +86,28 @@ app.get('/mentions', async (ctx) => {
 
 app.get('/user/:screen_name/:tweet_id', async (ctx) => {
   const { screen_name, tweet_id } = ctx.req.param()
-  const tweet = await readTweet({ screen_name, tweet_id })
-  return ctx.json(tweet)
+  try {
+    const tweet = await readTweet({ screen_name, tweet_id })
+    return ctx.json(tweet)
+  } catch (err) {
+    if (err instanceof SessionExpiredError) {
+      return ctx.json({ error: 'session_expired', message: err.message }, 403)
+    }
+    throw err
+  }
 })
 
 app.get('/user/:screen_name/status/:tweet_id', async (ctx) => {
   const { screen_name, tweet_id } = ctx.req.param()
-  const tweet = await readTweet({ screen_name, tweet_id })
-  return ctx.json(tweet)
+  try {
+    const tweet = await readTweet({ screen_name, tweet_id })
+    return ctx.json(tweet)
+  } catch (err) {
+    if (err instanceof SessionExpiredError) {
+      return ctx.json({ error: 'session_expired', message: err.message }, 403)
+    }
+    throw err
+  }
 })
 
 app.post('/tweets', async (ctx) => {
