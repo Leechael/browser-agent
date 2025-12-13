@@ -1,6 +1,6 @@
 import CDP, { type Client } from 'chrome-remote-interface'
-import { Subject, Observable, merge } from 'rxjs'
-import { filter, debounceTime } from 'rxjs/operators'
+import { Subject, Observable, merge, firstValueFrom, race, throwError, timer } from 'rxjs'
+import { filter, debounceTime, take, map, takeUntil } from 'rxjs/operators'
 
 export interface XhrResponse<T=any> {
   requestId: string;
@@ -13,8 +13,18 @@ export interface XhrResponse<T=any> {
 
 export const loadingInProgressSymbol = Symbol('loading-in-progress')
 export const loadingFinishedSymbol = Symbol('loading-finished')
+export const pageIdleSymbol = Symbol('page-idle')
 
-export type ObservableXHR = Observable<XhrResponse | typeof loadingFinishedSymbol>;
+export type StreamSignal = typeof loadingFinishedSymbol | typeof pageIdleSymbol
+export type ObservableXHR = Observable<XhrResponse | StreamSignal>;
+
+// Custom error for when page loaded but no matching XHR was found
+export class PageLoadedWithoutMatchError extends Error {
+  constructor(public pattern: string | RegExp) {
+    super(`Page loaded but no XHR matched pattern: ${pattern}`)
+    this.name = 'PageLoadedWithoutMatchError'
+  }
+}
 
 export interface PageManager {
   client: CDP.Client;
@@ -46,17 +56,61 @@ function getDomainFromUrl(url: string): string {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function setupNetworkMonitoring(client: Client) {
+interface NetworkMonitoringOptions {
+  idleTimeout?: number; // ms to wait before considering page idle (default: 3000)
+}
+
+async function setupNetworkMonitoring(
+  client: Client,
+  options: NetworkMonitoringOptions = {}
+) {
+  const { idleTimeout = 3000 } = options;
   const pendingRequests = new Map<string, PendingRequest>();
-  const { Network } = client;
+  const { Network, Page } = client;
 
   const xhrSubject = new Subject<XhrResponse>()
-  const pendingAllLoadSubject = new Subject<typeof loadingFinishedSymbol>();
+  const signalSubject = new Subject<StreamSignal>();
+
+  // Idle detection state
+  let pageLoaded = false;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let idleEmitted = false;
+
+  function emitIdleSignal() {
+    if (!idleEmitted && pageLoaded) {
+      idleEmitted = true;
+      signalSubject.next(pageIdleSymbol);
+    }
+  }
+
+  function resetIdleTimer() {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    if (pageLoaded && !idleEmitted) {
+      idleTimer = setTimeout(() => {
+        // Page loaded + no new requests for idleTimeout ms → emit idle signal
+        if (pendingRequests.size === 0) {
+          emitIdleSignal();
+        }
+      }, idleTimeout);
+    }
+  }
 
   await Network.enable();
 
+  // Listen for page load event
+  Page.loadEventFired(() => {
+    pageLoaded = true;
+    // Start idle timer after page load
+    resetIdleTimer();
+  });
+
   Network.requestWillBeSent(({ requestId, request, type }) => {
     if (type === 'XHR') {
+      // Reset idle timer when new XHR request starts
+      resetIdleTimer();
       pendingRequests.set(requestId, {
         url: request.url,
         timestamp: +(new Date),
@@ -95,7 +149,7 @@ async function setupNetworkMonitoring(client: Client) {
         for (let i = 0; i < 3; i++) {
           try {
             await delay(50 * (i + 1));
-            
+
             const xhrResponse: XhrResponse = {
               requestId,
               url: pending.url,
@@ -118,7 +172,9 @@ async function setupNetworkMonitoring(client: Client) {
       } finally {
         pendingRequests.delete(requestId);
         if (pendingRequests.size === 0) {
-          pendingAllLoadSubject.next(loadingFinishedSymbol)
+          signalSubject.next(loadingFinishedSymbol);
+          // Also reset idle timer when all requests finished
+          resetIdleTimer();
         }
       }
     }
@@ -129,15 +185,17 @@ async function setupNetworkMonitoring(client: Client) {
     if (pending) {
       pendingRequests.delete(requestId);
       if (pendingRequests.size === 0) {
-        pendingAllLoadSubject.next(loadingFinishedSymbol)
+        signalSubject.next(loadingFinishedSymbol);
+        // Also reset idle timer when all requests finished
+        resetIdleTimer();
       }
     }
   });
 
   return merge(
     xhrSubject,
-    pendingAllLoadSubject.pipe(
-      debounceTime(5000),
+    signalSubject.pipe(
+      debounceTime(1000), // Reduced from 5000ms for faster idle detection
     ),
   )
 }
@@ -183,9 +241,12 @@ export async function openPage({ url, port = Number(process.env.CHROME_PORT) || 
   }
 }
 
+/**
+ * @deprecated Use `waitForMatch` instead for better error handling
+ */
 export function matchedUrl(strOrRegex: string | RegExp) {
   return filter((i): i is XhrResponse => {
-    if (i === loadingFinishedSymbol) {
+    if (i === loadingFinishedSymbol || i === pageIdleSymbol) {
       return false
     }
     if (strOrRegex instanceof RegExp) {
@@ -193,4 +254,65 @@ export function matchedUrl(strOrRegex: string | RegExp) {
     }
     return (i as XhrResponse).url.includes(strOrRegex)
   })
+}
+
+/**
+ * Wait for a matching XHR request or throw if page becomes idle without match.
+ *
+ * @param strOrRegex - String or RegExp to match against XHR URLs
+ * @param timeoutMs - Maximum time to wait (default: 30000ms)
+ * @returns Promise that resolves with matching XhrResponse or rejects with PageLoadedWithoutMatchError
+ */
+export function waitForMatch(
+  xhr$: ObservableXHR,
+  strOrRegex: string | RegExp,
+  timeoutMs = 30000
+): Promise<XhrResponse> {
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+    const subscription = xhr$.subscribe({
+      next(value) {
+        if (resolved) return;
+
+        // Check for idle/finished signals
+        if (value === pageIdleSymbol || value === loadingFinishedSymbol) {
+          resolved = true;
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          subscription.unsubscribe();
+          reject(new PageLoadedWithoutMatchError(strOrRegex));
+          return;
+        }
+
+        // Check if URL matches
+        const xhrResponse = value as XhrResponse;
+        const matched = strOrRegex instanceof RegExp
+          ? strOrRegex.test(xhrResponse.url)
+          : xhrResponse.url.includes(strOrRegex);
+
+        if (matched) {
+          resolved = true;
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          subscription.unsubscribe();
+          resolve(xhrResponse);
+        }
+      },
+      error(err) {
+        if (resolved) return;
+        resolved = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        reject(err);
+      },
+    });
+
+    // Set timeout
+    timeoutHandle = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        subscription.unsubscribe();
+        reject(new Error(`Timeout waiting for XHR matching: ${strOrRegex}`));
+      }
+    }, timeoutMs);
+  });
 }

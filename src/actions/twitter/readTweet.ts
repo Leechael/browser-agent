@@ -1,7 +1,13 @@
 // TODO ensure selected the 'Following' tab.
-import { firstValueFrom } from 'rxjs'
-import { type PageOptions, openPage, matchedUrl } from '../common'
+import { type PageOptions, openPage, waitForMatch, PageLoadedWithoutMatchError } from '../common'
 import { extractTweet } from './transform'
+
+export class SessionExpiredError extends Error {
+  constructor(message = 'Twitter session expired, please re-login') {
+    super(message)
+    this.name = 'SessionExpiredError'
+  }
+}
 
 export type ReadTweetOptions = {
   screen_name: string
@@ -11,7 +17,15 @@ export type ReadTweetOptions = {
 export async function readTweet({ screen_name, tweet_id, ...options }: ReadTweetOptions) {
   const { client, xhr$ } = await openPage({ ...(options || {}), url: `https://x.com/${screen_name}/status/${tweet_id}` })
   try {
-    const resp = await firstValueFrom(xhr$.pipe(matchedUrl('TweetDetail')))
+    let resp
+    try {
+      resp = await waitForMatch(xhr$, 'TweetDetail', 30000)
+    } catch (err) {
+      if (err instanceof PageLoadedWithoutMatchError) {
+        throw new SessionExpiredError()
+      }
+      throw err
+    }
     const body = await resp.json()
     const instructions = (body?.data?.threaded_conversation_with_injections_v2?.instructions || []).filter((i: any) => i.type === 'TimelineAddEntries')
     const entries = (instructions[0] || { entries: [] }).entries || []
