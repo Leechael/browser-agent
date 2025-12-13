@@ -1,5 +1,7 @@
 import { Hono } from 'hono'
 import { logger } from 'hono/logger'
+import { timeout } from 'hono/timeout'
+import { HTTPException } from 'hono/http-exception'
 import { serve } from '@hono/node-server'
 import { streamSSE } from 'hono/streaming';
 import { SSETransport } from 'hono-mcp-server-sse-transport';
@@ -67,6 +69,24 @@ function createMcpServer() {
 const app = new Hono()
 
 app.use(logger())
+
+// Request timeout middleware (120 seconds)
+// Excludes stream routes: /sse, /mcp, /messages
+const REQUEST_TIMEOUT_MS = 120000
+
+const timeoutException = () =>
+  new HTTPException(504, {
+    message: 'Request timeout - the operation took too long'
+  })
+
+app.use('/*', async (c, next) => {
+  const path = c.req.path
+  // Skip timeout for stream routes
+  if (path === '/sse' || path === '/mcp' || path === '/messages') {
+    return next()
+  }
+  return timeout(REQUEST_TIMEOUT_MS, timeoutException)(c, next)
+})
 
 app.get('/home_timeline', async (ctx) => {
   const tweets = await readHomeTimeline()
