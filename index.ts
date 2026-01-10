@@ -13,6 +13,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { openPage } from '@/actions/common/openPage'
 import { waitForElement } from '@/actions/common/waitForElement'
 import { readHomeTimeline, readUserTimeline, readMentions, readTweet, postTweet, SessionExpiredError } from '@/actions/twitter'
+import { zValidator } from '@hono/zod-validator'
+import { runMacro, PlaybackRequest } from '@/macros'
 
 
 function createMcpServer() {
@@ -998,6 +1000,34 @@ app.delete("/mcp", async (c) => {
     { status: 405 }
   );
 });
+
+// Macro playback API
+app.post(
+  '/macro/playback',
+  zValidator('json', PlaybackRequest),
+  async (ctx) => {
+    const startTime = Date.now()
+
+    try {
+      const request = ctx.req.valid('json')
+      const result = await runMacro(request)
+
+      return ctx.json(result, result.success ? 200 : 500)
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      console.error(`[${new Date().toISOString()}] Macro playback failed:`, errorMsg)
+
+      return ctx.json(
+        {
+          success: false,
+          error: errorMsg,
+          duration: Date.now() - startTime,
+        },
+        500
+      )
+    }
+  }
+)
 
 serve({
   fetch: app.fetch,

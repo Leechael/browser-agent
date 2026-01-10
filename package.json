@@ -14,11 +14,13 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.7",
+    "@hono/zod-validator": "^0.7.6",
     "@modelcontextprotocol/sdk": "^1.11.1",
     "chrome-remote-interface": "^0.33.3",
     "fetch-to-node": "^2.1.0",
     "hono": "^4.11.0",
     "hono-mcp-server-sse-transport": "^0.0.7",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "zod": "^4.3.5"
   }
 }
