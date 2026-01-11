@@ -23,15 +23,20 @@ export class CookieSyncManager {
     return { ...this.config }
   }
 
+  // Check if domain matches pattern (exact match or subdomain)
+  private matchesDomain(domain: string, pattern: string): boolean {
+    return domain === pattern || domain.endsWith('.' + pattern)
+  }
+
   // Check if the domain should be synced
-  private shouldSyncDomain(domain: string): boolean {
+  shouldSyncDomain(domain: string): boolean {
     // Blacklist takes priority
-    if (this.config.excludedDomains.some((d) => domain.includes(d))) {
+    if (this.config.excludedDomains.some((d) => this.matchesDomain(domain, d))) {
       return false
     }
     // If whitelist exists, only sync domains in the whitelist
     if (this.config.includedDomains.length > 0) {
-      return this.config.includedDomains.some((d) => domain.includes(d))
+      return this.config.includedDomains.some((d) => this.matchesDomain(domain, d))
     }
     return true
   }
@@ -103,9 +108,13 @@ export class CookieSyncManager {
     if (!this.config.autoSync || !this.config.enabled) return
 
     this.syncTimer = setInterval(async () => {
-      const tabs = await browser.tabs.query({ active: true, currentWindow: true })
-      if (tabs[0]?.id) {
-        await this.syncCurrentTab(tabs[0].id)
+      try {
+        const tabs = await browser.tabs.query({ active: true, currentWindow: true })
+        if (tabs[0]?.id) {
+          await this.syncCurrentTab(tabs[0].id)
+        }
+      } catch (error) {
+        console.error('[CookieSync] Auto-sync error:', error)
       }
     }, this.config.syncInterval)
   }
@@ -140,6 +149,9 @@ export function setupCookieChangeListener(manager: CookieSyncManager) {
     if (!config.autoSync || !config.enabled) return
 
     const domain = changeInfo.cookie.domain.replace(/^\./, '')
+
+    // Check domain filtering
+    if (!manager.shouldSyncDomain(domain)) return
 
     // Get all cookies for this domain and sync
     const cookies = await browser.cookies.getAll({ domain })

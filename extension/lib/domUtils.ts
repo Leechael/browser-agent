@@ -9,20 +9,20 @@ export function generateSelector(element: Element): string {
 
   // 2. Try using data-testid (commonly used for testing)
   const testId = element.getAttribute('data-testid')
-  if (testId && document.querySelectorAll(`[data-testid="${testId}"]`).length === 1) {
-    return `[data-testid="${testId}"]`
+  if (testId && document.querySelectorAll(`[data-testid="${CSS.escape(testId)}"]`).length === 1) {
+    return `[data-testid="${CSS.escape(testId)}"]`
   }
 
   // 3. Try using aria-label
   const ariaLabel = element.getAttribute('aria-label')
-  if (ariaLabel && document.querySelectorAll(`[aria-label="${ariaLabel}"]`).length === 1) {
-    return `[aria-label="${ariaLabel}"]`
+  if (ariaLabel && document.querySelectorAll(`[aria-label="${CSS.escape(ariaLabel)}"]`).length === 1) {
+    return `[aria-label="${CSS.escape(ariaLabel)}"]`
   }
 
   // 4. Try using name attribute (for form elements)
   const name = element.getAttribute('name')
-  if (name && document.querySelectorAll(`[name="${name}"]`).length === 1) {
-    return `[name="${name}"]`
+  if (name && document.querySelectorAll(`[name="${CSS.escape(name)}"]`).length === 1) {
+    return `[name="${CSS.escape(name)}"]`
   }
 
   // 5. Build a path-based selector
@@ -75,12 +75,29 @@ function buildPathSelector(element: Element): string {
 }
 
 /**
+ * Escape a string for use in XPath expressions
+ */
+function escapeXPathString(str: string): string {
+  // If string contains no quotes, use double quotes
+  if (!str.includes('"')) {
+    return `"${str}"`
+  }
+  // If string contains no single quotes, use single quotes
+  if (!str.includes("'")) {
+    return `'${str}'`
+  }
+  // If string contains both, use concat()
+  const parts = str.split('"').map((part, i) => (i === 0 ? `"${part}"` : `'"',"${part}"`))
+  return `concat(${parts.join(',')})`
+}
+
+/**
  * Generate an XPath for an element
  */
 export function generateXPath(element: Element): string {
   // If element has an ID, use it directly
   if (element.id) {
-    return `//*[@id="${element.id}"]`
+    return `//*[@id=${escapeXPathString(element.id)}]`
   }
 
   const paths: string[] = []

@@ -43,8 +43,9 @@ async function init() {
       eventCapture.start()
       console.log('[Browser Agent] Recording resumed')
     }
-  } catch {
+  } catch (error) {
     // Background may not be ready yet
+    console.debug('[Browser Agent] Init error (background may not be ready):', error)
   }
 }
 

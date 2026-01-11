@@ -68,7 +68,7 @@ export default function Settings({ settings: initialSettings, onSettingsChange }
     setMessage(null)
 
     try {
-      const response = await fetch(`${settings.serverUrl}/reset`, {
+      const response = await fetch(`${settings.serverUrl}/`, {
         method: 'GET',
         signal: AbortSignal.timeout(5000),
       })

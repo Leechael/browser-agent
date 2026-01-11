@@ -67,8 +67,8 @@ export class EventCapture {
     const { element, selector, xpath, elementInfo } = this.pendingInput
     const value = element.value
 
-    // Only send if there's actual content
-    if (value !== undefined) {
+    // Only send if there's actual content (not empty string)
+    if (value) {
       const action: Omit<MacroAction, 'id' | 'timestamp'> = {
         type: 'type',
         selector,

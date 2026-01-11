@@ -131,18 +131,33 @@ export default function MacroListFull({ serverConnected, onEdit }: MacroListFull
 
       try {
         const text = await file.text()
-        const macro = JSON.parse(text) as Macro
+        const parsed = JSON.parse(text)
 
-        macro.id = Math.random().toString(36).substring(2, 15) + Date.now().toString(36)
-        macro.createdAt = Date.now()
-        macro.updatedAt = Date.now()
+        // Validate required fields
+        if (!parsed.name || typeof parsed.name !== 'string') {
+          throw new Error('Missing or invalid macro name')
+        }
+        if (!parsed.startUrl || typeof parsed.startUrl !== 'string') {
+          throw new Error('Missing or invalid startUrl')
+        }
+        if (!Array.isArray(parsed.actions)) {
+          throw new Error('Missing or invalid actions array')
+        }
+
+        const macro: Macro = {
+          ...parsed,
+          id: Math.random().toString(36).substring(2, 15) + Date.now().toString(36),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }
 
         const updatedMacros = [...macros, macro]
         await browser.storage.local.set({ [STORAGE_KEYS.MACROS]: updatedMacros })
         setMacros(updatedMacros)
         setMessage({ type: 'success', text: `Imported: ${macro.name}` })
-      } catch {
-        setMessage({ type: 'error', text: 'Invalid macro file' })
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : 'Invalid macro file'
+        setMessage({ type: 'error', text: msg })
       }
     }
     input.click()
@@ -261,7 +276,13 @@ export default function MacroListFull({ serverConnected, onEdit }: MacroListFull
                   <div className="flex justify-between">
                     <span>Start URL</span>
                     <span className="truncate max-w-[180px]" title={macro.startUrl}>
-                      {new URL(macro.startUrl).hostname}
+                      {(() => {
+                        try {
+                          return new URL(macro.startUrl).hostname
+                        } catch {
+                          return macro.startUrl
+                        }
+                      })()}
                     </span>
                   </div>
                 )}

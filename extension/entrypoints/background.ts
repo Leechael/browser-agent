@@ -118,7 +118,14 @@ async function handleMessage(
 
     case 'UPDATE_SETTINGS': {
       const newSettings = message.payload as Partial<ExtensionSettings>
-      settings = { ...settings, ...newSettings }
+      // Deep merge nested objects to avoid losing properties
+      settings = {
+        ...settings,
+        ...newSettings,
+        cookieSync: { ...settings.cookieSync, ...newSettings.cookieSync },
+        recording: { ...settings.recording, ...newSettings.recording },
+        playback: { ...settings.playback, ...newSettings.playback },
+      }
       await browser.storage.local.set({ [STORAGE_KEYS.SETTINGS]: settings })
 
       // Update services

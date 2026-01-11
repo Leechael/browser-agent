@@ -200,8 +200,9 @@ export class MacroRecorder {
             payload: this.state,
             timestamp: Date.now(),
           })
-        } catch {
-          // Tab may not have content script
+        } catch (error) {
+          // Tab may not have content script - this is expected for system pages
+          console.debug('[MacroRecorder] Could not send message to tab:', tab.id, error)
         }
       }
     }

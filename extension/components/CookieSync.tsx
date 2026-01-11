@@ -63,16 +63,22 @@ export default function CookieSync({ serverConnected }: CookieSyncProps) {
   }
 
   const handleAutoSyncChange = async (enabled: boolean) => {
+    const previousValue = autoSync
     setAutoSync(enabled)
-    await browser.runtime.sendMessage({
-      type: 'UPDATE_SETTINGS',
-      payload: {
-        cookieSync: {
-          autoSync: enabled,
+    try {
+      await browser.runtime.sendMessage({
+        type: 'UPDATE_SETTINGS',
+        payload: {
+          cookieSync: {
+            autoSync: enabled,
+          },
         },
-      },
-      timestamp: Date.now(),
-    })
+        timestamp: Date.now(),
+      })
+    } catch (error) {
+      console.error('[CookieSync] Failed to update auto-sync setting:', error)
+      setAutoSync(previousValue)
+    }
   }
 
   const formatTime = (timestamp: number) => {

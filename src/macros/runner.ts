@@ -165,10 +165,9 @@ async function executeScroll(
       expression: `window.scrollTo(${deltaX}, ${deltaY})`
     })
   } else if (action.selector) {
-    const escapedSelector = action.selector.replace(/'/g, "\\'")
     await Runtime.evaluate({
       expression: `(() => {
-        const el = document.querySelector('${escapedSelector}');
+        const el = document.querySelector(${JSON.stringify(action.selector)});
         if (el) {
           el.scrollLeft = ${deltaX};
           el.scrollTop = ${deltaY};
@@ -190,10 +189,8 @@ async function executeSelect(
   const { Runtime } = client
   await waitForElement(client, action.selector, 10000)
 
-  const escapedSelector = action.selector.replace(/'/g, "\\'")
-  const escapedValue = action.value.replace(/'/g, "\\'")
   await Runtime.evaluate({
-    expression: `document.querySelector('${escapedSelector}').value = '${escapedValue}'`
+    expression: `document.querySelector(${JSON.stringify(action.selector)}).value = ${JSON.stringify(action.value)}`
   })
 }
 
