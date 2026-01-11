@@ -1,0 +1,31 @@
+export { runMacro } from './runner'
+export {
+  MacroActionType,
+  KeyModifiers,
+  KeyInfo,
+  Coordinates,
+  ScrollDelta,
+  ElementInfo,
+  Viewport,
+  MacroAction,
+  Macro,
+  PlaybackOptions,
+  PlaybackRequest,
+  PlaybackError,
+  PlaybackResult,
+} from './types'
+export type {
+  MacroActionType as MacroActionTypeValue,
+  KeyModifiers as KeyModifiersType,
+  KeyInfo as KeyInfoType,
+  Coordinates as CoordinatesType,
+  ScrollDelta as ScrollDeltaType,
+  ElementInfo as ElementInfoType,
+  Viewport as ViewportType,
+  MacroAction as MacroActionData,
+  Macro as MacroData,
+  PlaybackOptions as PlaybackOptionsData,
+  PlaybackRequest as PlaybackRequestData,
+  PlaybackError as PlaybackErrorData,
+  PlaybackResult as PlaybackResultData,
+} from './types'
