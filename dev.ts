@@ -112,7 +112,7 @@ async function startChrome(): Promise<string> {
   if (HEADLESS) {
     args.push('--headless=new');
   }
-  
+  console.log('Starting Chrome with :', chromePath, args);
   chromeProcess = spawn(chromePath, args, {
     stdio: 'ignore',
     detached: true
