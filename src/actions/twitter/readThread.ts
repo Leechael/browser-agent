@@ -17,39 +17,18 @@ export interface ThreadResult {
 
 interface ParsedReplies {
   tweets: any[]
-  hasShowMore: boolean
 }
 
 function extractRepliesFromResponse(body: any): ParsedReplies {
   const instructions = (body?.data?.threaded_conversation_with_injections_v2?.instructions || [])
-    .filter((i: any) => i.type === 'TimelineAddEntries')
+    .filter((i: any) => i.type === 'TimelineAddEntries' || i.type === 'TimelineAddToModule')
 
-  const entries = (instructions[0] || { entries: [] }).entries || []
   const tweets: any[] = []
-  let hasShowMore = false
-
-  for (const entry of entries) {
-    const content = entry.content
-
-    // 跳过主推文（已单独处理）和 cursor
-    if (entry.entryId?.startsWith('tweet-')) {
-      continue
-    }
-
-    // 处理回复模块 (TimelineTimelineModule)
-    if (content?.__typename === 'TimelineTimelineModule' || content?.entryType === 'TimelineTimelineModule') {
-      const items = content.items || []
-
-      for (const item of items) {
-        const itemContent = item.item?.itemContent
-
-        // 检查是否是 ShowMore cursor
-        if (itemContent?.__typename === 'TimelineTimelineCursor' &&
-            itemContent?.cursorType === 'ShowMore') {
-          hasShowMore = true
-          continue
-        }
-
+  for (const instruction of instructions) {
+    if (instruction.type === 'TimelineAddToModule') {
+      const moduleItems = instruction.moduleItems
+      for (const moduleItem of moduleItems) {
+        const itemContent = moduleItem.item?.itemContent
         // 提取推文
         if (itemContent?.__typename === 'TimelineTweet') {
           const tweetResult = itemContent.tweet_results?.result
@@ -58,10 +37,39 @@ function extractRepliesFromResponse(body: any): ParsedReplies {
           }
         }
       }
+    } else if (instruction.type === 'TimelineAddEntries') {
+
+      const entries = (instructions[0] || { entries: [] }).entries || (instructions[0] || { moduleItems: [] }).moduleItems || []
+
+      for (const entry of entries) {
+        const content = entry.content
+
+        // 跳过主推文（已单独处理）和 cursor
+        if (entry.entryId?.startsWith('tweet-')) {
+          continue
+        }
+
+        // 处理回复模块 (TimelineTimelineModule)
+        if (content?.__typename === 'TimelineTimelineModule' || content?.entryType === 'TimelineTimelineModule') {
+          const items = content.items || []
+
+          for (const item of items) {
+            const itemContent = item.item?.itemContent
+
+            // 提取推文
+            if (itemContent?.__typename === 'TimelineTweet') {
+              const tweetResult = itemContent.tweet_results?.result
+              if (tweetResult) {
+                tweets.push(extractTweet(tweetResult))
+              }
+            }
+          }
+        }
+      }
     }
   }
 
-  return { tweets, hasShowMore }
+  return { tweets }
 }
 
 function extractMainTweet(body: any, tweetId: string): any | null {
@@ -114,10 +122,11 @@ export async function readThread({
     }
 
     // 提取初始回复
+    let hasShowMore = true
     const allReplies: any[] = []
     const seenIds = new Set<string>()
 
-    let { tweets: initialReplies, hasShowMore } = extractRepliesFromResponse(body)
+    let { tweets: initialReplies } = extractRepliesFromResponse(body)
 
     // 去重并添加
     for (const reply of initialReplies) {
@@ -132,32 +141,49 @@ export async function readThread({
     await Page.enable()
     await Runtime.enable()
 
-    while (hasShowMore && allReplies.length < maxTweets) {
-      // 使用 Runtime.evaluate 查找包含 "Show replies" 文本的 span
-      const { result } = await Runtime.evaluate({
-        expression: `
-          (function() {
-            const spans = document.querySelectorAll('span');
-            for (const span of spans) {
-              if (span.textContent === 'Show replies') {
-                return true;
-              }
-            }
-            return false;
-          })()
-        `,
-        returnByValue: true
-      })
+    while (allReplies.length < maxTweets) {
+      // 轮询等待 "Show replies" 按钮出现（异步渲染）
+      const POLL_INTERVAL = 200
+      const POLL_TIMEOUT = 2000
+      const pollStart = Date.now()
+      let buttonFound = false
 
-      if (!result.value) {
-        // 没有找到 Show replies 按钮，停止
+      while (Date.now() - pollStart < POLL_TIMEOUT) {
+        const { result } = await Runtime.evaluate({
+          expression: `
+            (function() {
+              const spans = document.querySelectorAll('span');
+              for (const span of spans) {
+                if (span.textContent === 'Show replies') {
+                  return true;
+                }
+              }
+              return false;
+            })()
+          `,
+          returnByValue: true
+        })
+
+        if (result.value) {
+          buttonFound = true
+          break
+        }
+
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL))
+      }
+
+      if (!buttonFound) {
+        // 等待超时仍未找到 Show replies 按钮，停止
         hasShowMore = false
         break
       }
 
-      // 点击 Show replies 按钮
-      await Runtime.evaluate({
-        expression: `
+      // 等待新的 TweetDetail 响应
+      try {
+        const waitForNewTweetDetailPromise = waitForMatch(xhr$, 'TweetDetail', xhrWaitTimeout)
+        // 点击 Show replies 按钮
+        const clickShowMorePromise = Runtime.evaluate({
+          expression: `
           (function() {
             const spans = document.querySelectorAll('span');
             for (const span of spans) {
@@ -169,16 +195,12 @@ export async function readThread({
             return false;
           })()
         `,
-        returnByValue: true
-      })
-
-      // 等待新的 TweetDetail 响应
-      try {
-        const newResp = await waitForMatch(xhr$, 'TweetDetail', xhrWaitTimeout)
+          returnByValue: true
+        })
+        const [_, newResp] = await Promise.all([clickShowMorePromise, waitForNewTweetDetailPromise])
         const newBody = await newResp.json()
 
-        const { tweets: newReplies, hasShowMore: moreAvailable } = extractRepliesFromResponse(newBody)
-        hasShowMore = moreAvailable
+        const { tweets: newReplies } = extractRepliesFromResponse(newBody)
 
         // 去重并添加新回复
         let addedCount = 0
@@ -205,9 +227,9 @@ export async function readThread({
 
     return {
       mainTweet,
-      replies: allReplies.slice(0, maxTweets),
+      replies: allReplies,
       totalCount: allReplies.length + 1, // +1 for main tweet
-      hasMore: hasShowMore && allReplies.length >= maxTweets
+      hasMore: hasShowMore
     }
 
   } finally {
