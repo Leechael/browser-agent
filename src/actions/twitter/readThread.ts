@@ -29,7 +29,6 @@ function extractRepliesFromResponse(body: any): ParsedReplies {
       const moduleItems = instruction.moduleItems
       for (const moduleItem of moduleItems) {
         const itemContent = moduleItem.item?.itemContent
-        // 提取推文
         if (itemContent?.__typename === 'TimelineTweet') {
           const tweetResult = itemContent.tweet_results?.result
           if (tweetResult) {
@@ -56,7 +55,6 @@ function extractRepliesFromResponse(body: any): ParsedReplies {
           for (const item of items) {
             const itemContent = item.item?.itemContent
 
-            // 提取推文
             if (itemContent?.__typename === 'TimelineTweet') {
               const tweetResult = itemContent.tweet_results?.result
               if (tweetResult) {
@@ -103,9 +101,9 @@ export async function readThread({
 
   try {
     // 等待初始 TweetDetail 响应
-    let resp
+    let firstResp
     try {
-      resp = await waitForMatch(xhr$, 'TweetDetail', xhrWaitTimeout)
+      firstResp = await waitForMatch(xhr$, 'TweetDetail', xhrWaitTimeout)
     } catch (err) {
       if (err instanceof PageLoadedWithoutMatchError) {
         throw new SessionExpiredError()
@@ -113,123 +111,134 @@ export async function readThread({
       throw err
     }
 
-    const body = await resp.json()
+    const firstBody = await firstResp.json()
 
     // 提取主推文
-    const mainTweet = extractMainTweet(body, tweet_id)
+    const mainTweet = extractMainTweet(firstBody, tweet_id)
     if (!mainTweet) {
       throw new Error(`Main tweet not found: ${tweet_id}`)
     }
 
-    // 提取初始回复
-    let hasShowMore = true
+    // 共享状态
     const allReplies: any[] = []
     const seenIds = new Set<string>()
+    let stopLoading = false
 
-    let { tweets: initialReplies } = extractRepliesFromResponse(body)
+    // 处理单次 TweetDetail 响应，返回新增条数
+    function processResponse(body: any): number {
+      const { tweets } = extractRepliesFromResponse(body)
+      let added = 0
+      for (const tweet of tweets) {
+        if (tweet?.id && !seenIds.has(tweet.id)) {
+          seenIds.add(tweet.id)
+          allReplies.push(tweet)
+          added++
+        }
+      }
+      return added
+    }
 
-    // 去重并添加
-    for (const reply of initialReplies) {
-      if (!seenIds.has(reply.id)) {
-        seenIds.add(reply.id)
-        allReplies.push(reply)
+    processResponse(firstBody)
+
+    // 初始响应已满足阈值，直接返回
+    if (allReplies.length >= maxTweets) {
+      return {
+        mainTweet,
+        replies: allReplies.slice(0, maxTweets),
+        totalCount: maxTweets + 1,
+        hasMore: true,
       }
     }
 
-    // 循环加载更多回复
     const { Page, Runtime } = client
     await Page.enable()
     await Runtime.enable()
 
-    while (allReplies.length < maxTweets) {
-      // 轮询等待 "Show replies" 按钮出现（异步渲染）
-      const POLL_INTERVAL = 200
-      const POLL_TIMEOUT = 2000
-      const pollStart = Date.now()
-      let buttonFound = false
+    // Watcher loop: 持续订阅 TweetDetail 响应，积累数据直到达到阈值或无新数据
+    async function watcherLoop(): Promise<'threshold' | 'timeout' | 'no-new-data'> {
+      while (!stopLoading) {
+        let resp
+        try {
+          // 等待下一个 TweetDetail 响应（由 action loop 触发加载后到来）
+          resp = await waitForMatch(xhr$, 'TweetDetail', 5000)
+        } catch {
+          // 超时：action loop 未能触发新的请求，或等待时间超限
+          return 'timeout'
+        }
 
-      while (Date.now() - pollStart < POLL_TIMEOUT) {
-        const { result } = await Runtime.evaluate({
-          expression: `
-            (function() {
-              const spans = document.querySelectorAll('span');
-              for (const span of spans) {
-                if (span.textContent === 'Show replies') {
-                  return true;
+        let body: any
+        try {
+          body = await resp.json()
+        } catch {
+          // 解析失败，跳过本次继续等待
+          continue
+        }
+
+        const added = processResponse(body)
+
+        if (allReplies.length >= maxTweets) {
+          return 'threshold'
+        }
+
+        if (added === 0) {
+          // 已无新回复，加载完毕
+          return 'no-new-data'
+        }
+      }
+      return 'threshold'
+    }
+
+    // Action loop: 轮询触发加载——优先点击 "Show replies"，否则滚动到底部触发无限滚动
+    async function actionLoop(): Promise<void> {
+      while (!stopLoading) {
+        // 给页面留出渲染时间后再触发下一次加载
+        await new Promise<void>(resolve => setTimeout(resolve, 800))
+        if (stopLoading) break
+
+        try {
+          await Runtime.evaluate({
+            expression: `
+              (function() {
+                // 优先尝试点击 "Show replies" 按钮
+                const spans = document.querySelectorAll('span');
+                for (const span of spans) {
+                  if (span.textContent === 'Show replies') {
+                    span.click();
+                    return 'show-replies';
+                  }
                 }
-              }
-              return false;
-            })()
-          `,
-          returnByValue: true
-        })
-
-        if (result.value) {
-          buttonFound = true
+                // 未找到按钮，滚动到底部触发无限加载
+                window.scrollTo(0, document.body.scrollHeight);
+                return 'scrolled';
+              })()
+            `,
+            returnByValue: true,
+          })
+        } catch {
+          // 客户端已关闭，退出循环
           break
         }
-
-        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL))
-      }
-
-      if (!buttonFound) {
-        // 等待超时仍未找到 Show replies 按钮，停止
-        hasShowMore = false
-        break
-      }
-
-      // 等待新的 TweetDetail 响应
-      try {
-        const waitForNewTweetDetailPromise = waitForMatch(xhr$, 'TweetDetail', xhrWaitTimeout)
-        // 点击 Show replies 按钮
-        const clickShowMorePromise = Runtime.evaluate({
-          expression: `
-          (function() {
-            const spans = document.querySelectorAll('span');
-            for (const span of spans) {
-              if (span.textContent === 'Show replies') {
-                span.click();
-                return true;
-              }
-            }
-            return false;
-          })()
-        `,
-          returnByValue: true
-        })
-        const [_, newResp] = await Promise.all([clickShowMorePromise, waitForNewTweetDetailPromise])
-        const newBody = await newResp.json()
-
-        const { tweets: newReplies } = extractRepliesFromResponse(newBody)
-
-        // 去重并添加新回复
-        let addedCount = 0
-        for (const reply of newReplies) {
-          if (!seenIds.has(reply.id)) {
-            seenIds.add(reply.id)
-            allReplies.push(reply)
-            addedCount++
-          }
-        }
-
-        // 如果没有新回复，停止循环防止无限循环
-        if (addedCount === 0) {
-          break
-        }
-
-      } catch (err) {
-        // 加载更多失败时停止，但不抛出错误
-        console.warn('Failed to load more replies:', err)
-        hasShowMore = false
-        break
       }
     }
+
+    // 启动 action loop（后台持续触发加载）
+    const actionPromise = actionLoop().catch(() => { /* 忽略客户端关闭等预期错误 */ })
+
+    // 等待 watcher loop 得出结论
+    const watcherResult = await watcherLoop()
+
+    // 通知 action loop 停止，等待其最后一次迭代完成（最多 500ms）
+    stopLoading = true
+    await Promise.race([
+      actionPromise,
+      new Promise<void>(resolve => setTimeout(resolve, 500)),
+    ])
 
     return {
       mainTweet,
       replies: allReplies,
-      totalCount: allReplies.length + 1, // +1 for main tweet
-      hasMore: hasShowMore
+      totalCount: allReplies.length,
+      hasMore: watcherResult === 'threshold',
     }
 
   } finally {
