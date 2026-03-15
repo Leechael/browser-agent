@@ -1,6 +1,6 @@
 # browser-agent
 
-This is an experiemental project that exposes an x.com account as API, it need you run Chrome with CDP enabled and login the x.com account first.
+This is an experimental project that exposes an x.com account as API, it need you run Chrome with CDP enabled and login the x.com account first.
 
 ## API Endpoints
 
@@ -10,6 +10,8 @@ Retrieves the home timeline tweets.
 ### GET /user/:screen_name
 Retrieves tweets from a specific user's timeline.
 - `:screen_name` - The Twitter screen name of the user
+- Query parameters:
+  - `tab` (optional) - One of `tweets` (default), `replies`, `media`
 
 ### GET /mentions
 Retrieves mentions for the authenticated user.
@@ -18,11 +20,45 @@ Retrieves mentions for the authenticated user.
 Retrieves a specific tweet.
 - `:screen_name` - The Twitter screen name of the user
 - `:tweet_id` - The ID of the tweet
+- For article tweets, the response includes:
+  - `article` - Resolved blocks with inlined entity data (media URLs, markdown, embedded tweets)
+  - `article_markdown` - The article content converted to Markdown
+  - `article_title` - The article title
+  - `article_cover` - The cover image URL
 
 ### GET /user/:screen_name/status/:tweet_id
-Alternative endpoint to retrieve a specific tweet.
+Alternative endpoint to retrieve a specific tweet (same as above).
+
+### GET /thread/:screen_name/:tweet_id
+Retrieves a tweet thread with replies.
 - `:screen_name` - The Twitter screen name of the user
 - `:tweet_id` - The ID of the tweet
+- Query parameters:
+  - `max` (optional) - Maximum number of replies to fetch (default: 100)
+- Response:
+  ```json
+  {
+    "mainTweet": { ... },
+    "replies": [ ... ],
+    "totalCount": 42,
+    "hasMore": false
+  }
+  ```
+
+### GET /search
+Search tweets with advanced filters.
+- Query parameters:
+  - `q` (required) - Search query
+  - `searchType` (optional) - One of `top` (default), `latest`, `photos`, `videos`
+  - `from` (optional) - Filter by author
+  - `to` (optional) - Filter by recipient
+  - `since` (optional) - Start date (YYYY-MM-DD)
+  - `until` (optional) - End date (YYYY-MM-DD)
+  - `filter` (optional) - One of `media`, `images`, `videos`, `links`, `replies`, `native_video`
+  - `minRetweets` (optional) - Minimum retweet count
+  - `minFaves` (optional) - Minimum favorite count
+  - `minReplies` (optional) - Minimum reply count
+  - `lang` (optional) - Language code
 
 ### POST /tweets
 Posts a new tweet.
