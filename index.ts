@@ -12,7 +12,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { openPage } from '@/actions/common/openPage'
 import { waitForElement } from '@/actions/common/waitForElement'
-import { readHomeTimeline, readUserTimeline, readMentions, readTweet, postTweet, SessionExpiredError } from '@/actions/twitter'
+import { readHomeTimeline, readUserTimeline, readMentions, readTweet, postTweet, SessionExpiredError, search } from '@/actions/twitter'
 import { zValidator } from '@hono/zod-validator'
 import { runMacro, PlaybackRequest } from '@/macros'
 
@@ -42,8 +42,8 @@ function createMcpServer() {
         const tweet = await readTweet({ screen_name, tweet_id })
         console.log('Tweet read')
         let content = ""
-        if (tweet.article) {
-          content = tweet.article.map((block: any) => block.text).join("\n")
+        if (tweet.article_markdown) {
+          content = tweet.article_markdown
         } else {
           let lines = [tweet.text]
           for (const thread of tweet.threads || []) {
@@ -97,7 +97,8 @@ app.get('/home_timeline', async (ctx) => {
 
 app.get('/user/:screen_name', async (ctx) => {
   const { screen_name } = ctx.req.param()
-  const tweets = await readUserTimeline({ screen_name })
+  const tab = (ctx.req.query('tab') || 'tweets') as 'tweets' | 'replies' | 'media'
+  const tweets = await readUserTimeline({ screen_name, tab })
   return ctx.json(tweets)
 })
 
@@ -136,6 +137,36 @@ app.post('/tweets', async (ctx) => {
   const { text } = await ctx.req.json()
   await postTweet({ text: text as string })
   return ctx.json({ "success": true })
+})
+
+app.get('/search', async (ctx) => {
+  const query = ctx.req.query('q')
+  if (!query) {
+    return ctx.json({ error: 'Missing required query parameter: q' }, 400)
+  }
+
+  function parseIntParam(name: string): number | undefined {
+    const val = ctx.req.query(name)
+    if (!val) return undefined
+    const n = Number(val)
+    if (!Number.isFinite(n)) return undefined
+    return n
+  }
+
+  const tweets = await search({
+    query,
+    searchType: (ctx.req.query('searchType') as any) || 'top',
+    from: ctx.req.query('from'),
+    to: ctx.req.query('to'),
+    since: ctx.req.query('since'),
+    until: ctx.req.query('until'),
+    filter: ctx.req.query('filter') as any,
+    minRetweets: parseIntParam('minRetweets'),
+    minFaves: parseIntParam('minFaves'),
+    minReplies: parseIntParam('minReplies'),
+    lang: ctx.req.query('lang'),
+  })
+  return ctx.json(tweets)
 })
 
 // Helper function to process page and extract content
