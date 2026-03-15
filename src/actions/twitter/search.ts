@@ -17,7 +17,7 @@ export interface SearchOptions extends Omit<PageOptions, 'url'> {
   lang?: string
 
   // Search result type
-  searchType?: 'top' | 'latest' | 'people' | 'photos' | 'videos'
+  searchType?: 'top' | 'latest' | 'photos' | 'videos'
 }
 
 /**
@@ -80,8 +80,6 @@ function getSearchTypeParam(searchType?: SearchOptions['searchType']): string {
   switch (searchType) {
     case 'latest':
       return 'live'
-    case 'people':
-      return 'user'
     case 'photos':
       return 'image'
     case 'videos':

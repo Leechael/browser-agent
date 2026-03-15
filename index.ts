@@ -144,6 +144,15 @@ app.get('/search', async (ctx) => {
   if (!query) {
     return ctx.json({ error: 'Missing required query parameter: q' }, 400)
   }
+
+  function parseIntParam(name: string): number | undefined {
+    const val = ctx.req.query(name)
+    if (!val) return undefined
+    const n = Number(val)
+    if (!Number.isFinite(n)) return undefined
+    return n
+  }
+
   const tweets = await search({
     query,
     searchType: (ctx.req.query('searchType') as any) || 'top',
@@ -152,9 +161,9 @@ app.get('/search', async (ctx) => {
     since: ctx.req.query('since'),
     until: ctx.req.query('until'),
     filter: ctx.req.query('filter') as any,
-    minRetweets: ctx.req.query('minRetweets') ? Number(ctx.req.query('minRetweets')) : undefined,
-    minFaves: ctx.req.query('minFaves') ? Number(ctx.req.query('minFaves')) : undefined,
-    minReplies: ctx.req.query('minReplies') ? Number(ctx.req.query('minReplies')) : undefined,
+    minRetweets: parseIntParam('minRetweets'),
+    minFaves: parseIntParam('minFaves'),
+    minReplies: parseIntParam('minReplies'),
     lang: ctx.req.query('lang'),
   })
   return ctx.json(tweets)

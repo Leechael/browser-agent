@@ -15,7 +15,12 @@ const TAB_CONFIG: Record<UserTimelineTab, { urlSuffix: string; xhrPattern: strin
   media: { urlSuffix: '/media', xhrPattern: 'UserMedia' },
 }
 
+const VALID_TABS = new Set<string>(Object.keys(TAB_CONFIG))
+
 export async function readUserTimeline({ screen_name, tab = 'tweets', ...options }: ReadUserTimelineOptions): Promise<unknown[]> {
+  if (!VALID_TABS.has(tab)) {
+    throw new Error(`Invalid tab "${tab}". Must be one of: ${[...VALID_TABS].join(', ')}`)
+  }
   const config = TAB_CONFIG[tab]
   const url = `https://x.com/${screen_name}${config.urlSuffix}`
   const { client, xhr$ } = await openPage({ ...options, url })

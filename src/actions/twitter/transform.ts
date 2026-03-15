@@ -91,23 +91,39 @@ function resolveArticleEntities(articleResult: any) {
   return { resolvedBlocks, entityMap }
 }
 
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const v of a) if (!b.has(v)) return false
+  return true
+}
+
 function applyInlineStyles(text: string, styles: any[]): string {
   if (!styles || !styles.length) return text
-  const sorted = [...styles].sort((a, b) => b.offset - a.offset)
   const chars = [...text]
-  for (const s of sorted) {
-    const start = s.offset
-    const segment = chars.slice(start, start + s.length).join('')
-    let wrapped: string
-    switch (s.style) {
-      case 'Bold': wrapped = `**${segment}**`; break
-      case 'Italic': wrapped = `*${segment}*`; break
-      case 'Strikethrough': wrapped = `~~${segment}~~`; break
-      default: wrapped = segment
+  // Track which styles apply to each character position
+  const marks: Set<string>[] = chars.map(() => new Set())
+  for (const s of styles) {
+    for (let i = s.offset; i < s.offset + s.length && i < chars.length; i++) {
+      marks[i].add(s.style)
     }
-    chars.splice(start, s.length, ...([...wrapped]))
   }
-  return chars.join('')
+  // Build output by grouping consecutive characters with same style set
+  const result: string[] = []
+  let i = 0
+  while (i < chars.length) {
+    const currentMarks = marks[i]
+    // Collect run of chars with identical marks
+    let j = i
+    while (j < chars.length && setsEqual(marks[j], currentMarks)) j++
+    const segment = chars.slice(i, j).join('')
+    let wrapped = segment
+    if (currentMarks.has('Bold')) wrapped = `**${wrapped}**`
+    if (currentMarks.has('Italic')) wrapped = `*${wrapped}*`
+    if (currentMarks.has('Strikethrough')) wrapped = `~~${wrapped}~~`
+    result.push(wrapped)
+    i = j
+  }
+  return result.join('')
 }
 
 function articleBlocksToMarkdown(blocks: any[]): string {
