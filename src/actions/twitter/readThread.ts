@@ -38,7 +38,7 @@ function extractRepliesFromResponse(body: any): ParsedReplies {
       }
     } else if (instruction.type === 'TimelineAddEntries') {
 
-      const entries = (instructions[0] || { entries: [] }).entries || (instructions[0] || { moduleItems: [] }).moduleItems || []
+      const entries = instruction.entries || []
 
       for (const entry of entries) {
         const content = entry.content
@@ -145,7 +145,7 @@ export async function readThread({
       return {
         mainTweet,
         replies: allReplies.slice(0, maxTweets),
-        totalCount: maxTweets + 1,
+        totalCount: allReplies.length,
         hasMore: true,
       }
     }
@@ -234,11 +234,12 @@ export async function readThread({
       new Promise<void>(resolve => setTimeout(resolve, 500)),
     ])
 
+    const capped = allReplies.slice(0, maxTweets)
     return {
       mainTweet,
-      replies: allReplies,
+      replies: capped,
       totalCount: allReplies.length,
-      hasMore: watcherResult === 'threshold',
+      hasMore: watcherResult === 'threshold' || allReplies.length > maxTweets,
     }
 
   } finally {
