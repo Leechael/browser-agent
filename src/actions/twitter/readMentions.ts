@@ -5,7 +5,7 @@ import { extractTweet } from './transform'
 
 export async function readMentions(options?: PageOptions) {
   const { client, xhr$ } = await openPage({ ...(options || {}), url: 'https://x.com/notifications/mentions' })
-  const resp = await firstValueFrom(xhr$.pipe(matchedUrl('mentions.json')))
+  const resp = await firstValueFrom(xhr$.pipe(matchedUrl('NotificationsTimeline')))
   const body = await resp.json()
   const { tweets = {}, users = {} } = body?.globalObjects || {}
   const instructions = body?.timeline?.instructions || []

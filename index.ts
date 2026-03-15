@@ -12,7 +12,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { openPage } from '@/actions/common/openPage'
 import { waitForElement } from '@/actions/common/waitForElement'
-import { readHomeTimeline, readUserTimeline, readMentions, readTweet, postTweet, SessionExpiredError, search } from '@/actions/twitter'
+import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search } from '@/actions/twitter'
 import { zValidator } from '@hono/zod-validator'
 import { runMacro, PlaybackRequest } from '@/macros'
 
@@ -139,6 +139,7 @@ app.post('/tweets', async (ctx) => {
   return ctx.json({ "success": true })
 })
 
+<<<<<<< HEAD
 app.get('/search', async (ctx) => {
   const query = ctx.req.query('q')
   if (!query) {
@@ -167,6 +168,21 @@ app.get('/search', async (ctx) => {
     lang: ctx.req.query('lang'),
   })
   return ctx.json(tweets)
+})
+
+app.get('/thread/:screen_name/:tweet_id', async (ctx) => {
+  const { screen_name, tweet_id } = ctx.req.param()
+  const maxTweets = parseInt(ctx.req.query('max') || '100', 10)
+
+  try {
+    const result = await readThread({ screen_name, tweet_id, maxTweets })
+    return ctx.json(result)
+  } catch (err) {
+    if (err instanceof SessionExpiredError) {
+      return ctx.json({ error: 'session_expired', message: err.message }, 403)
+    }
+    throw err
+  }
 })
 
 // Helper function to process page and extract content

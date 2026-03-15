@@ -175,3 +175,7 @@ dist
 .DS_Store
 
 storage
+
+# Claude Code related files
+CLAUDE.md
+docs/plans/*
