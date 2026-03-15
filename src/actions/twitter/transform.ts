@@ -91,38 +91,81 @@ function resolveArticleEntities(articleResult: any) {
   return { resolvedBlocks, entityMap }
 }
 
-function setsEqual(a: Set<string>, b: Set<string>): boolean {
-  if (a.size !== b.size) return false
-  for (const v of a) if (!b.has(v)) return false
-  return true
-}
+const STYLE_PRIORITY = ['Strikethrough', 'Bold', 'Italic'] as const
+const STYLE_MARKERS: Record<string, string> = { Bold: '**', Italic: '*', Strikethrough: '~~' }
 
 function applyInlineStyles(text: string, styles: any[]): string {
   if (!styles || !styles.length) return text
   const chars = [...text]
-  // Track which styles apply to each character position
-  const marks: Set<string>[] = chars.map(() => new Set())
+
+  // Collect all boundary positions where styles change
+  const boundarySet = new Set<number>()
+  boundarySet.add(0)
+  boundarySet.add(chars.length)
   for (const s of styles) {
-    for (let i = s.offset; i < s.offset + s.length && i < chars.length; i++) {
-      marks[i].add(s.style)
+    boundarySet.add(s.offset)
+    boundarySet.add(Math.min(s.offset + s.length, chars.length))
+  }
+  const boundaries = [...boundarySet].sort((a, b) => a - b)
+
+  // Compute active styles (in priority order) at a given position
+  function getActiveStyles(pos: number): string[] {
+    const active = new Set<string>()
+    for (const s of styles) {
+      if (pos >= s.offset && pos < s.offset + s.length) active.add(s.style)
     }
+    return STYLE_PRIORITY.filter(s => active.has(s))
   }
-  // Build output by grouping consecutive characters with same style set
+
   const result: string[] = []
-  let i = 0
-  while (i < chars.length) {
-    const currentMarks = marks[i]
-    // Collect run of chars with identical marks
-    let j = i
-    while (j < chars.length && setsEqual(marks[j], currentMarks)) j++
-    const segment = chars.slice(i, j).join('')
-    let wrapped = segment
-    if (currentMarks.has('Bold')) wrapped = `**${wrapped}**`
-    if (currentMarks.has('Italic')) wrapped = `*${wrapped}*`
-    if (currentMarks.has('Strikethrough')) wrapped = `~~${wrapped}~~`
-    result.push(wrapped)
-    i = j
+  // openStack tracks currently open styles, outermost first
+  let openStack: string[] = []
+
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const pos = boundaries[i]
+    const nextPos = boundaries[i + 1]
+    const needed = getActiveStyles(pos)
+
+    const toRemove = openStack.filter(s => !needed.includes(s))
+    const toAdd = needed.filter(s => !openStack.includes(s))
+
+    if (toRemove.length > 0 || toAdd.length > 0) {
+      // Find outermost style that needs closing
+      let closeUntil = -1
+      for (const s of toRemove) {
+        const idx = openStack.indexOf(s)
+        if (idx !== -1 && (closeUntil === -1 || idx < closeUntil)) closeUntil = idx
+      }
+
+      if (closeUntil >= 0) {
+        // Close from innermost to closeUntil
+        for (let j = openStack.length - 1; j >= closeUntil; j--) {
+          result.push(STYLE_MARKERS[openStack[j]])
+        }
+        // Reopen styles that should continue
+        const continuing = openStack.slice(closeUntil).filter(s => !toRemove.includes(s))
+        openStack = openStack.slice(0, closeUntil)
+        for (const s of continuing) {
+          result.push(STYLE_MARKERS[s])
+          openStack.push(s)
+        }
+      }
+
+      // Open new styles
+      for (const s of toAdd) {
+        result.push(STYLE_MARKERS[s])
+        openStack.push(s)
+      }
+    }
+
+    result.push(chars.slice(pos, nextPos).join(''))
   }
+
+  // Close all remaining styles (innermost first)
+  for (let j = openStack.length - 1; j >= 0; j--) {
+    result.push(STYLE_MARKERS[openStack[j]])
+  }
+
   return result.join('')
 }
 
