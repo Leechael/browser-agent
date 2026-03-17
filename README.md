@@ -111,6 +111,41 @@ Alternative to DELETE for clearing browser data.
   }
   ```
 
+### GET /page/*
+Fetches a web page and extracts content via CSS selector.
+- The URL path after `/page/` is treated as the target URL (with `https://` prefix)
+- Query parameters:
+  - `__selector__` (optional) - CSS selector to extract. If omitted, returns full page HTML
+
+### POST /page/*
+Fetches a web page and extracts content via multiple CSS selectors.
+- The URL path after `/page/` is treated as the target URL (with `https://` prefix)
+- Request body:
+  ```json
+  {
+    "selectors": { "title": "h1", "content": ".main" },
+    "timeout": 10
+  }
+  ```
+
+### GET /reset
+Resets the browser by navigating to `about:blank`.
+
+### POST /macro/playback
+Plays back a recorded macro.
+- Request body: Validated against `PlaybackRequest` Zod schema
+
+### MCP (Model Context Protocol)
+
+The server exposes MCP endpoints for tool integration:
+
+- **GET /sse** - SSE transport for MCP connections
+- **POST /messages?sessionId=...** - Message handler for SSE transport
+- **POST /mcp** - Streamable HTTP transport for MCP (stateless)
+
+Available MCP tools:
+- `readTweet` - Read a tweet by URL, returns article markdown or thread text
+
 ## Timeout Configuration
 
 The server implements a multi-layer timeout system to prevent hanging requests:
