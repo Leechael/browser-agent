@@ -15,6 +15,7 @@ import { waitForElement } from '@/actions/common/waitForElement'
 import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search } from '@/actions/twitter'
 import { zValidator } from '@hono/zod-validator'
 import { runMacro, PlaybackRequest } from '@/macros'
+import { fetchPage } from '@/actions/web'
 
 
 function createMcpServer() {
@@ -139,7 +140,6 @@ app.post('/tweets', async (ctx) => {
   return ctx.json({ "success": true })
 })
 
-<<<<<<< HEAD
 app.get('/search', async (ctx) => {
   const query = ctx.req.query('q')
   if (!query) {
@@ -397,6 +397,42 @@ app.post('/page/*', async (ctx) => {
       error: 'Invalid JSON in request body',
       success: false
     }, 400)
+  }
+})
+
+// Fetch page as markdown
+// GET /fetch/* - simple version, URL in path
+app.get('/fetch/*', async (ctx) => {
+  const path = ctx.req.path.split('/fetch/')[1]
+  if (!path) {
+    return ctx.json({ error: 'Missing URL path' }, 400)
+  }
+
+  const url = path.startsWith('http') ? path : `https://${path}`
+  const inPage = ctx.req.query('inPage') === 'true'
+
+  try {
+    const result = await fetchPage({ url, inPage })
+    return ctx.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return ctx.json({ error: message }, 500)
+  }
+})
+
+// POST /fetch - full version, URL in body (supports complex URLs)
+app.post('/fetch', async (ctx) => {
+  const body = await ctx.req.json() as { url?: string; inPage?: boolean }
+  if (!body.url) {
+    return ctx.json({ error: 'Missing url in request body' }, 400)
+  }
+
+  try {
+    const result = await fetchPage({ url: body.url, inPage: body.inPage })
+    return ctx.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return ctx.json({ error: message }, 500)
   }
 })
 
