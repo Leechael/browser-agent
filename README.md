@@ -128,6 +128,43 @@ Fetches a web page and extracts content via multiple CSS selectors.
   }
   ```
 
+### GET /fetch/*
+Fetches a web page and returns its main content as Markdown. Uses a two-tier strategy:
+1. First tries content negotiation with `Accept: text/markdown` header
+2. If the server doesn't return `text/markdown`, loads the page via CDP (with full JS rendering) and extracts the main content using [defuddle](https://github.com/kepano/defuddle)
+
+- The URL path after `/fetch/` is the target URL. URLs without a scheme default to `https://`
+- Query parameters:
+  - `inPage` (optional) - Set to `true` to run defuddle in the browser page context (has access to computed styles and Shadow DOM). Default: `false` (runs in Node.js)
+- Examples:
+  - `GET /fetch/https://example.com/article`
+  - `GET /fetch/example.com/article?inPage=true`
+- Response:
+  ```json
+  {
+    "url": "https://example.com/article",
+    "source": "content-negotiation | defuddle",
+    "title": "Article Title",
+    "author": "Author Name",
+    "description": "...",
+    "domain": "example.com",
+    "published": "2026-01-01",
+    "content": "# Article Title\n\nArticle body in markdown...",
+    "wordCount": 1234
+  }
+  ```
+
+### POST /fetch
+Full version of the fetch endpoint. Accepts the URL in the request body, which avoids issues with complex URLs containing query strings or fragments.
+- Request body:
+  ```json
+  {
+    "url": "http://example.com/path?key=value&foo=bar#section",
+    "inPage": false
+  }
+  ```
+- Response: Same as `GET /fetch/*`
+
 ### GET /reset
 Resets the browser by navigating to `about:blank`.
 
