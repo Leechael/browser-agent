@@ -12,12 +12,20 @@ export function extractMediaInfo(media: any[]) {
 export function extractText(tweet: any) {
   const legacy = tweet.legacy
   if (tweet.note_tweet && tweet.note_tweet.note_tweet_results) {
-    const noteTweet = tweet.note_tweet.note_tweet_results.result;
-    // TODO: convert to markdown.
-    return noteTweet.text;
+    const note = tweet.note_tweet.note_tweet_results.result;
+    const noteText =
+      note?.text ??
+      note?.richtext?.text ??
+      note?.rich_text?.text ??
+      note?.content?.text ??
+      note?.content?.richtext?.text ??
+      note?.content?.rich_text?.text;
+    if (typeof noteText === 'string' && noteText.trim()) {
+      return noteText;
+    }
   }
 
-  let text = legacy.full_text;
+  let text = legacy?.full_text ?? legacy?.text ?? tweet?.text ?? '';
   if (legacy.entities) {
     if (legacy.entities.media) {
       // Remove any embedding media links.
