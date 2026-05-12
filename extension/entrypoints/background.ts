@@ -13,9 +13,18 @@ async function initialize() {
   if (initialized) return
   initialized = true
 
-  // Load settings
-  const stored = await browser.storage.local.get(STORAGE_KEYS.SETTINGS)
-  settings = (stored[STORAGE_KEYS.SETTINGS] as ExtensionSettings) || DEFAULT_SETTINGS
+  try {
+    const stored = await browser.storage.local.get(STORAGE_KEYS.SETTINGS)
+    const loaded = stored[STORAGE_KEYS.SETTINGS] as ExtensionSettings | undefined
+    if (loaded) {
+      settings = loaded
+      console.log('[Browser Agent Extension] Settings loaded from storage')
+    } else {
+      console.log('[Browser Agent Extension] No stored settings, using defaults')
+    }
+  } catch (err) {
+    console.error('[Browser Agent Extension] Failed to load settings from storage:', err)
+  }
 
   // Initialize API client
   initApiClient(settings.serverUrl)
@@ -126,7 +135,15 @@ async function handleMessage(
         recording: { ...settings.recording, ...newSettings.recording },
         playback: { ...settings.playback, ...newSettings.playback },
       }
-      await browser.storage.local.set({ [STORAGE_KEYS.SETTINGS]: settings })
+
+      try {
+        await browser.storage.local.set({ [STORAGE_KEYS.SETTINGS]: settings })
+        console.log('[Browser Agent Extension] Settings saved to storage')
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[Browser Agent Extension] Failed to save settings:', msg)
+        throw new Error(`Storage write failed: ${msg}`)
+      }
 
       // Update services
       try {
@@ -152,8 +169,14 @@ export default defineBackground(() => {
   // Listen for messages
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleMessage(message as Message, sender)
-      .then(sendResponse)
-      .catch((err) => sendResponse({ error: err instanceof Error ? err.message : String(err) }))
+      .then((result) => {
+        if (result && typeof result === 'object' && 'error' in result) {
+          sendResponse({ success: false, error: (result as { error: string }).error })
+        } else {
+          sendResponse(result)
+        }
+      })
+      .catch((err) => sendResponse({ success: false, error: err instanceof Error ? err.message : String(err) }))
     return true // Keep the message channel open
   })
 

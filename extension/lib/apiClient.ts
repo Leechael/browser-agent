@@ -83,7 +83,7 @@ export class BrowserAgentClient {
   // Health check
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/reset`, {
+      const response = await fetch(`${this.baseUrl}/health`, {
         method: 'GET',
         signal: AbortSignal.timeout(5000),
       })
