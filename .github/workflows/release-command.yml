@@ -1,0 +1,285 @@
+name: Release
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Release type"
+        required: true
+        type: choice
+        options: [patch, minor, major]
+      ref:
+        description: "Branch/ref to release from (default: main)"
+        required: false
+        default: main
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: read
+
+jobs:
+  parse:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.parse.outputs.should_release }}
+      release_type: ${{ steps.parse.outputs.release_type }}
+      ref: ${{ steps.parse.outputs.ref }}
+      issue_number: ${{ steps.parse.outputs.issue_number }}
+      requested_by: ${{ steps.parse.outputs.requested_by }}
+      comment_id: ${{ steps.parse.outputs.comment_id }}
+    steps:
+      - name: Parse release comment
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body = (context.payload.comment?.body || '').trim();
+            const actor = context.payload.comment?.user?.login || context.actor;
+            const assoc = context.payload.comment?.author_association || '';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueNumber = context.payload.issue?.number || context.payload.pull_request?.number;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            const safeComment = async (message) => {
+              if (!issueNumber) {
+                core.warning(`No issue number available. message=${message}`);
+                return null;
+              }
+              try {
+                const { data } = await github.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: message });
+                return data?.id || null;
+              } catch (e) {
+                core.warning(`Failed to post issue comment: ${e.message}`);
+                return null;
+              }
+            };
+
+            if (!/!release\b/i.test(body)) {
+              return;
+            }
+
+            const match = body.match(/^!release\s+(patch|minor|major)\s*$/i);
+            if (!match) {
+              await safeComment(`@${actor} invalid command. Use: \`!release <patch|minor|major>\`.\nIf you want to build the extension without releasing, use \`!build [chrome|firefox|both]\`.`);
+              return;
+            }
+
+            const allowed = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+            if (!allowed.includes(assoc)) {
+              await safeComment(`@${actor} you are not allowed to trigger release.`);
+              return;
+            }
+
+            let prNumber = null;
+            if (context.eventName === 'issue_comment') {
+              if (!context.payload.issue?.pull_request) {
+                await safeComment(`@${actor} release command only works in PR comments.`);
+                return;
+              }
+              prNumber = context.payload.issue.number;
+            } else if (context.eventName === 'pull_request_review_comment') {
+              prNumber = context.payload.pull_request?.number;
+            }
+
+            if (!prNumber) {
+              await safeComment(`@${actor} unable to resolve PR for release command.`);
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+            if (!pr.head.repo || pr.head.repo.full_name !== `${owner}/${repo}`) {
+              await safeComment(`@${actor} release from fork PR is not supported.`);
+              return;
+            }
+
+            const releaseType = match[1].toLowerCase();
+            const startedBody = [
+              '🔄 Release started',
+              '',
+              `- Bump: \`${releaseType}\``,
+              `- Source ref: \`${pr.head.ref}\``,
+              `- Requested by: @${actor}`,
+              `- Run: ${runUrl}`
+            ].join('\n');
+
+            const commentId = await safeComment(startedBody);
+            core.setOutput('should_release', 'true');
+            core.setOutput('release_type', releaseType);
+            core.setOutput('ref', pr.head.ref);
+            core.setOutput('issue_number', String(prNumber));
+            core.setOutput('requested_by', actor);
+            if (commentId) {
+              core.setOutput('comment_id', String(commentId));
+            }
+
+  create-tag:
+    needs: [parse]
+    if: |
+      always() && (
+        github.event_name == 'workflow_dispatch' ||
+        needs.parse.outputs.should_release == 'true'
+      )
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      RELEASE_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_type || needs.parse.outputs.release_type }}
+      SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || needs.parse.outputs.ref }}
+      ISSUE_NUMBER: ${{ needs.parse.outputs.issue_number }}
+      REQUESTED_BY: ${{ github.event_name == 'workflow_dispatch' && github.actor || needs.parse.outputs.requested_by }}
+      COMMENT_ID: ${{ needs.parse.outputs.comment_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Compute next version and tag
+        id: version
+        run: |
+          TAG_PREFIX="v"
+
+          # Get latest tag matching v*
+          latest_tag=$(git tag -l "${TAG_PREFIX}*" --sort=-version:refname | head -n 1 || true)
+
+          if [ -z "$latest_tag" ]; then
+            major=0; minor=0; patch=0
+          else
+            version_part="${latest_tag#${TAG_PREFIX}}"
+            # Remove any pre-release suffix for bumping
+            version_part="${version_part%%-*}"
+            IFS='.' read -r major minor patch <<< "$version_part"
+          fi
+
+          case "$RELEASE_TYPE" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          version="${major}.${minor}.${patch}"
+          tag="${TAG_PREFIX}${version}"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Latest tag: $latest_tag"
+          echo "Next version: $version"
+          echo "Next tag: $tag"
+
+      - name: Update extension/package.json version
+        working-directory: extension
+        run: |
+          version='${{ steps.version.outputs.version }}'
+          # Use node to update JSON safely
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '$version';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          cat package.json | grep '"version"'
+
+      - name: Commit version bump
+        run: |
+          git add extension/package.json
+          git commit -m "chore(release): bump version to ${{ steps.version.outputs.tag }} [skip ci]" || true
+
+      - name: Create and push tag
+        run: |
+          tag='${{ steps.version.outputs.tag }}'
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists"
+            exit 1
+          fi
+          git tag "$tag"
+          git push origin HEAD:"$SOURCE_REF"
+          git push origin "$tag"
+
+      - name: Trigger release workflow for new tag
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'release-extension.yml',
+              ref: 'main',
+              inputs: {
+                tag: '${{ steps.version.outputs.tag }}'
+              }
+            });
+
+      - name: Update started comment on success
+        if: success() && env.ISSUE_NUMBER != '' && env.COMMENT_ID != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '✅ Release succeeded',
+              '',
+              `- Tag: \`${{ steps.version.outputs.tag }}\``,
+              `- Bump: \`${process.env.RELEASE_TYPE}\``,
+              `- Source ref: \`${process.env.SOURCE_REF}\``,
+              `- Requested by: @${process.env.REQUESTED_BY}`,
+              `- Run: ${runUrl}`
+            ].join('\n');
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              body
+            });
+
+      - name: Update started comment on failure
+        if: failure() && env.ISSUE_NUMBER != '' && env.COMMENT_ID != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '❌ Release failed',
+              '',
+              `- Bump: \`${process.env.RELEASE_TYPE}\``,
+              `- Source ref: \`${process.env.SOURCE_REF}\``,
+              `- Requested by: @${process.env.REQUESTED_BY}`,
+              `- Run: ${runUrl}`
+            ].join('\n');
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              body
+            });
