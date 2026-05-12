@@ -1,0 +1,82 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.2.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Install dependencies
+        working-directory: extension
+        run: npm ci
+
+      - name: Build Chrome extension
+        working-directory: extension
+        run: npm run zip
+
+      - name: Build Firefox extension
+        working-directory: extension
+        run: npm run zip:firefox
+
+      - name: Collect artifacts
+        working-directory: extension
+        run: |
+          mkdir -p ../dist
+          find .output -name "*.zip" -exec cp {} ../dist/ \; 2>/dev/null || true
+          ls -la ../dist/
+
+      - name: Generate CHANGELOG.md
+        run: |
+          current_tag="${RELEASE_TAG}"
+          previous_tag=$(git tag -l "v*" --sort=-version:refname | grep -v "^${current_tag}$" | head -n 1 || true)
+
+          {
+            echo "# Changelog"
+            echo
+            echo "## ${current_tag}"
+            echo
+            if [ -n "${previous_tag}" ]; then
+              echo "Changes since ${previous_tag}:"
+              echo
+              git log --pretty='- %s (%h)' "${previous_tag}..${current_tag}"
+            else
+              echo "Initial release changes:"
+              echo
+              git log --pretty='- %s (%h)' "${current_tag}"
+            fi
+          } > dist/CHANGELOG.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          body_path: dist/CHANGELOG.md
+          files: dist/*.zip
+          prerelease: ${{ contains(env.RELEASE_TAG, '-alpha.') || contains(env.RELEASE_TAG, '-beta.') || contains(env.RELEASE_TAG, '-rc.') }}

@@ -1,0 +1,219 @@
+name: Build Extension
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      browser:
+        description: "Browser target"
+        required: true
+        type: choice
+        options: [chrome, firefox, both]
+        default: both
+      ref:
+        description: "Branch/ref to build from (default: main)"
+        required: false
+        default: main
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  parse:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.parse.outputs.should_build }}
+      browser: ${{ steps.parse.outputs.browser }}
+      ref: ${{ steps.parse.outputs.ref }}
+      issue_number: ${{ steps.parse.outputs.issue_number }}
+      requested_by: ${{ steps.parse.outputs.requested_by }}
+      comment_id: ${{ steps.parse.outputs.comment_id }}
+    steps:
+      - name: Parse build comment
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body = (context.payload.comment?.body || '').trim();
+            const actor = context.payload.comment?.user?.login || context.actor;
+            const assoc = context.payload.comment?.author_association || '';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueNumber = context.payload.issue?.number;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            const safeComment = async (message) => {
+              if (!issueNumber) {
+                core.warning(`No issue number available. message=${message}`);
+                return null;
+              }
+              try {
+                const { data } = await github.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body: message });
+                return data?.id || null;
+              } catch (e) {
+                core.warning(`Failed to post issue comment: ${e.message}`);
+                return null;
+              }
+            };
+
+            if (!/!build\b/i.test(body)) {
+              return;
+            }
+
+            const match = body.match(/^!build(?:\s+(chrome|firefox|both))?\s*$/i);
+            if (!match) {
+              await safeComment(`@${actor} invalid command. Use: \`!build [chrome|firefox|both]\`. Default is \`both\`.`);
+              return;
+            }
+
+            const allowed = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+            if (!allowed.includes(assoc)) {
+              await safeComment(`@${actor} you are not allowed to trigger build.`);
+              return;
+            }
+
+            let sourceRef = 'main';
+            let prNumber = null;
+
+            if (context.eventName === 'issue_comment') {
+              if (context.payload.issue?.pull_request) {
+                prNumber = context.payload.issue.number;
+                const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+                if (!pr.head.repo || pr.head.repo.full_name !== `${owner}/${repo}`) {
+                  await safeComment(`@${actor} build from fork PR is not supported.`);
+                  return;
+                }
+                sourceRef = pr.head.ref;
+              } else {
+                sourceRef = 'main';
+              }
+            }
+
+            const browser = (match[1] || 'both').toLowerCase();
+            const startedBody = [
+              '🔄 Extension build started',
+              '',
+              `- Browser: \`${browser}\``,
+              `- Source ref: \`${sourceRef}\``,
+              `- Requested by: @${actor}`,
+              `- Run: ${runUrl}`
+            ].join('\n');
+
+            const commentId = await safeComment(startedBody);
+            core.setOutput('should_build', 'true');
+            core.setOutput('browser', browser);
+            core.setOutput('ref', sourceRef);
+            core.setOutput('issue_number', String(issueNumber));
+            core.setOutput('requested_by', actor);
+            if (commentId) {
+              core.setOutput('comment_id', String(commentId));
+            }
+
+  build:
+    needs: [parse]
+    if: |
+      always() && (
+        github.event_name == 'workflow_dispatch' ||
+        needs.parse.outputs.should_build == 'true'
+      )
+    runs-on: ubuntu-latest
+    env:
+      BROWSER: ${{ github.event_name == 'workflow_dispatch' && inputs.browser || needs.parse.outputs.browser }}
+      SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || needs.parse.outputs.ref }}
+      ISSUE_NUMBER: ${{ needs.parse.outputs.issue_number }}
+      REQUESTED_BY: ${{ github.event_name == 'workflow_dispatch' && github.actor || needs.parse.outputs.requested_by }}
+      COMMENT_ID: ${{ needs.parse.outputs.comment_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Install dependencies
+        working-directory: extension
+        run: npm ci
+
+      - name: Build Chrome extension
+        if: env.BROWSER == 'chrome' || env.BROWSER == 'both'
+        working-directory: extension
+        run: npm run zip
+
+      - name: Build Firefox extension
+        if: env.BROWSER == 'firefox' || env.BROWSER == 'both'
+        working-directory: extension
+        run: npm run zip:firefox
+
+      - name: Collect artifacts
+        id: collect
+        working-directory: extension
+        run: |
+          mkdir -p ../dist
+          find .output -name "*.zip" -exec cp {} ../dist/ \; 2>/dev/null || true
+          ls -la ../dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-${{ env.BROWSER }}-${{ github.run_id }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Update comment on success
+        if: success() && env.ISSUE_NUMBER != '' && env.COMMENT_ID != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '✅ Extension build succeeded',
+              '',
+              `- Browser: \`${process.env.BROWSER}\``,
+              `- Source ref: \`${process.env.SOURCE_REF}\``,
+              `- Requested by: @${process.env.REQUESTED_BY}`,
+              `- Run: ${runUrl}`
+            ].join('\n');
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              body
+            });
+
+      - name: Update comment on failure
+        if: failure() && env.ISSUE_NUMBER != '' && env.COMMENT_ID != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '❌ Extension build failed',
+              '',
+              `- Browser: \`${process.env.BROWSER}\``,
+              `- Source ref: \`${process.env.SOURCE_REF}\``,
+              `- Requested by: @${process.env.REQUESTED_BY}`,
+              `- Run: ${runUrl}`
+            ].join('\n');
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              body
+            });
