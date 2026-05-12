@@ -9,9 +9,10 @@ func newSearchCmd() *cobra.Command {
 	var params client.SearchParams
 
 	cmd := &cobra.Command{
-		Use:   "search <query>",
-		Short: "Search tweets",
-		Args:  cobra.ExactArgs(1),
+		GroupID: "x",
+		Use:     "search <query>",
+		Short:   "Search tweets",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := getClient(cmd)
 			if err != nil {

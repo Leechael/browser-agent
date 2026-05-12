@@ -9,9 +9,10 @@ func newFetchCmd() *cobra.Command {
 	var params client.FetchParams
 
 	cmd := &cobra.Command{
-		Use:   "fetch <url>",
-		Short: "Fetch web page content as markdown",
-		Args:  cobra.ExactArgs(1),
+		GroupID: "web",
+		Use:     "fetch <url>",
+		Short:   "Fetch web page content as markdown",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := getClient(cmd)
 			if err != nil {

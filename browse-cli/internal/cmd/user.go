@@ -9,9 +9,10 @@ func newUserCmd() *cobra.Command {
 	var params client.UserTimelineParams
 
 	cmd := &cobra.Command{
-		Use:   "user <screen_name>",
-		Short: "Get a user's timeline",
-		Args:  cobra.ExactArgs(1),
+		GroupID: "x",
+		Use:     "user <screen_name>",
+		Short:   "Get a user's timeline",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := getClient(cmd)
 			if err != nil {

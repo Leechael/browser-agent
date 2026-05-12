@@ -6,8 +6,9 @@ import (
 
 func newResetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "reset",
-		Short: "Reset browser to about:blank",
+		GroupID: "system",
+		Use:     "reset",
+		Short:   "Reset browser to about:blank",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := getClient(cmd)
 			if err != nil {

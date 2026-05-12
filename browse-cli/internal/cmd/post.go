@@ -6,9 +6,10 @@ import (
 
 func newPostCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "post <text>",
-		Short: "Post a new tweet",
-		Args:  cobra.ExactArgs(1),
+		GroupID: "x",
+		Use:     "post <text>",
+		Short:   "Post a new tweet",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := getClient(cmd)
 			if err != nil {

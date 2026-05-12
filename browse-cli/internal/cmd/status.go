@@ -12,8 +12,9 @@ import (
 
 func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Check API connectivity and config",
+		GroupID: "system",
+		Use:     "status",
+		Short:   "Check API connectivity and config",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			f, err := getFormatter(cmd)
 			if err != nil {

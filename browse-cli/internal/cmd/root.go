@@ -49,6 +49,15 @@ func NewRootCmd() *cobra.Command {
 	pf.BoolVar(&plain, "plain", false, "Output compact plain text")
 	pf.StringVar(&jqExpr, "jq", "", "Filter JSON output with a jq expression (requires --json)")
 
+	// Register command groups.
+	cmd.CompletionOptions.DisableDefaultCmd = true
+
+	cmd.AddGroup(
+		&cobra.Group{ID: "web", Title: "Web Content:"},
+		&cobra.Group{ID: "x", Title: "Twitter / X:"},
+		&cobra.Group{ID: "system", Title: "System:"},
+	)
+
 	cmd.AddCommand(newStatusCmd())
 	cmd.AddCommand(newFetchCmd())
 	cmd.AddCommand(newPageCmd())
@@ -57,9 +66,32 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newSearchCmd())
 	cmd.AddCommand(newTimelineCmd())
 	cmd.AddCommand(newPostCmd())
-	cmd.AddCommand(newCookiesCmd())
-	cmd.AddCommand(newClearCmd())
 	cmd.AddCommand(newResetCmd())
+
+	// Manual completion command so we can assign it to the system group.
+	completionCmd := &cobra.Command{
+		Use:                   "completion [bash|zsh|fish|powershell]",
+		Short:                 "Generate the autocompletion script for the specified shell",
+		GroupID:               "system",
+		DisableFlagsInUseLine: true,
+		ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
+		Args:                  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch args[0] {
+			case "bash":
+				return cmd.Root().GenBashCompletion(cmd.OutOrStdout())
+			case "zsh":
+				return cmd.Root().GenZshCompletion(cmd.OutOrStdout())
+			case "fish":
+				return cmd.Root().GenFishCompletion(cmd.OutOrStdout(), true)
+			case "powershell":
+				return cmd.Root().GenPowerShellCompletionWithDesc(cmd.OutOrStdout())
+			default:
+				return fmt.Errorf("unsupported shell: %s", args[0])
+			}
+		},
+	}
+	cmd.AddCommand(completionCmd)
 
 	// Override default help command with topic-aware version.
 	cmd.SetHelpCommand(newHelpCmd())

@@ -9,9 +9,10 @@ func newPageCmd() *cobra.Command {
 	var params client.PageParams
 
 	cmd := &cobra.Command{
-		Use:   "page <url>",
-		Short: "Fetch web page with CSS selector extraction",
-		Args:  cobra.ExactArgs(1),
+		GroupID: "web",
+		Use:     "page <url>",
+		Short:   "Fetch web page with CSS selector extraction",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := getClient(cmd)
 			if err != nil {

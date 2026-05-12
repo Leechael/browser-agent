@@ -6,8 +6,9 @@ import (
 
 func newTimelineCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "timeline",
-		Short: "Timeline operations",
+		GroupID: "x",
+		Use:     "timeline",
+		Short:   "Timeline operations",
 	}
 	cmd.AddCommand(newHomeTimelineCmd())
 	cmd.AddCommand(newMentionsCmd())

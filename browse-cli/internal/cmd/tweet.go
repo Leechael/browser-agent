@@ -7,8 +7,9 @@ import (
 
 func newTweetCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "tweet",
-		Short: "Twitter/X tweet operations",
+		GroupID: "x",
+		Use:     "tweet",
+		Short:   "Twitter/X tweet operations",
 	}
 	cmd.AddCommand(newTweetGetCmd())
 	cmd.AddCommand(newTweetThreadCmd())
