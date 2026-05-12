@@ -1,199 +1,126 @@
 # browser-agent
 
-This is an experimental project that exposes an x.com account as API, it need you run Chrome with CDP enabled and login the x.com account first.
+> Turn your Chrome browser into a programmable HTTP API. Scrape Twitter/X timelines, search tweets, extract web pages as Markdown, sync cookies, and record browser macros — all via a lightweight local server talking to Chrome over CDP.
 
-## API Endpoints
+[![GitHub stars](https://img.shields.io/github/stars/Leechael/browser-agent?style=social)](https://github.com/Leechael/browser-agent)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Build](https://img.shields.io/github/actions/workflow/status/Leechael/browser-agent/build-extension.yml?style=flat-square)](https://github.com/Leechael/browser-agent/actions)
+[![Version](https://img.shields.io/github/v/release/Leechael/browser-agent?style=flat-square)](https://github.com/Leechael/browser-agent/releases)
 
-### GET /home_timeline
-Retrieves the home timeline tweets.
+[![Star History Chart](https://api.star-history.com/svg?repos=Leechael/browser-agent&type=Date)](https://star-history.com/#Leechael/browser-agent&Date)
 
-### GET /user/:screen_name
-Retrieves tweets from a specific user's timeline.
-- `:screen_name` - The Twitter screen name of the user
-- Query parameters:
-  - `tab` (optional) - One of `tweets` (default), `replies`, `media`
+[Changelog](https://github.com/Leechael/browser-agent/releases) · [Issues](https://github.com/Leechael/browser-agent/issues)
 
-### GET /mentions
-Retrieves mentions for the authenticated user.
+## ✨ Features
 
-### GET /user/:screen_name/:tweet_id
-Retrieves a specific tweet.
-- `:screen_name` - The Twitter screen name of the user
-- `:tweet_id` - The ID of the tweet
-- For article tweets, the response includes:
-  - `article` - Resolved blocks with inlined entity data (media URLs, markdown, embedded tweets)
-  - `article_markdown` - The article content converted to Markdown
-  - `article_title` - The article title
-  - `article_cover` - The cover image URL
+| Feature | Description |
+|---------|-------------|
+| 🐦 Twitter/X API | Read home timeline, user timelines, mentions, threads, search, and post tweets |
+| 🔍 Smart Search | Advanced tweet search with filters (date range, media type, min engagement) |
+| 📝 Article Extraction | Convert Twitter articles and any web page to clean Markdown |
+| 🍪 Cookie Sync | Bidirectional cookie management between your browser and the server |
+| 🎬 Macro Recording | Record and replay browser interactions via Chrome extension |
+| 🧹 Data Cleanup | Clear cookies, storage, cache per-domain or globally |
+| 🤖 MCP Support | Expose tools via Model Context Protocol (SSE & Streamable HTTP) |
+| ⏱️ Timeout Controls | Fine-grained timeouts for CDP, navigation, XHR, and idle detection |
 
-### GET /user/:screen_name/status/:tweet_id
-Alternative endpoint to retrieve a specific tweet (same as above).
+## 🚀 Quick Start
 
-### GET /thread/:screen_name/:tweet_id
-Retrieves a tweet thread with replies.
-- `:screen_name` - The Twitter screen name of the user
-- `:tweet_id` - The ID of the tweet
-- Query parameters:
-  - `max` (optional) - Maximum number of replies to fetch (default: 100)
-- Response:
-  ```json
-  {
-    "mainTweet": { ... },
-    "replies": [ ... ],
-    "totalCount": 42,
-    "hasMore": false
-  }
-  ```
+### 1. Install
 
-### GET /search
-Search tweets with advanced filters.
-- Query parameters:
-  - `q` (required) - Search query
-  - `searchType` (optional) - One of `top` (default), `latest`, `photos`, `videos`
-  - `from` (optional) - Filter by author
-  - `to` (optional) - Filter by recipient
-  - `since` (optional) - Start date (YYYY-MM-DD)
-  - `until` (optional) - End date (YYYY-MM-DD)
-  - `filter` (optional) - One of `media`, `images`, `videos`, `links`, `replies`, `native_video`
-  - `minRetweets` (optional) - Minimum retweet count
-  - `minFaves` (optional) - Minimum favorite count
-  - `minReplies` (optional) - Minimum reply count
-  - `lang` (optional) - Language code
+```bash
+git clone https://github.com/Leechael/browser-agent.git
+cd browser-agent
+npm install
+```
 
-### POST /tweets
-Posts a new tweet.
-- Request body: `{ "text": "Your tweet content here" }`
+### 2. Start Chrome with CDP
 
-### GET /cookies/:domain
-Retrieves cookies for a specific domain.
-- `:domain` - The domain to get cookies for (e.g., `x.com`)
-- Query parameters:
-  - `urls` (optional) - Comma-separated list of specific URLs to get cookies for
+```bash
+# macOS example
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/Library/Application Support/BrowserAgent"
+```
 
-### POST /cookies/:domain
-Sets cookies for a specific domain.
-- `:domain` - The domain to set cookies for
-- Request body (JSON):
-  ```json
-  {
-    "cookies": [
-      { "name": "cookie_name", "value": "cookie_value", "path": "/", "secure": true }
-    ]
-  }
-  ```
-- Or raw cookie string (Content-Type: `text/plain`):
-  ```
-  cookie1=value1; cookie2=value2
-  ```
+> Login to [x.com](https://x.com) in this Chrome instance before making API calls.
 
-### DELETE /clear/:domain?
-Clears browser data (cookies, cache, storage).
-- `:domain` (optional) - Specific domain to clear data for. If omitted, clears all data.
-- Query parameters (all default to `true`):
-  - `cookies` - Clear cookies
-  - `localStorage` - Clear local storage
-  - `sessionStorage` - Clear session storage
-  - `indexedDB` - Clear IndexedDB
-  - `cache` - Clear browser cache
-  - `all` - Clear all data types
+### 3. Run the Server
 
-### POST /clear/:domain?
-Alternative to DELETE for clearing browser data.
-- Request body:
-  ```json
-  {
-    "cookies": true,
-    "localStorage": true,
-    "sessionStorage": true,
-    "indexedDB": true,
-    "cache": true,
-    "all": false
-  }
-  ```
+```bash
+npm run dev
+```
 
-### GET /page/*
-Fetches a web page and extracts content via CSS selector.
-- The URL path after `/page/` is treated as the target URL (with `https://` prefix)
-- Query parameters:
-  - `__selector__` (optional) - CSS selector to extract. If omitted, returns full page HTML
+⚡ **Done!** The server is running on [http://localhost:3000](http://localhost:3000).
 
-### POST /page/*
-Fetches a web page and extracts content via multiple CSS selectors.
-- The URL path after `/page/` is treated as the target URL (with `https://` prefix)
-- Request body:
-  ```json
-  {
-    "selectors": { "title": "h1", "content": ".main" },
-    "timeout": 10
-  }
-  ```
+## 🏗️ Architecture
 
-### GET /fetch/*
-Fetches a web page and returns its main content as Markdown. Uses a two-tier strategy:
-1. First tries content negotiation with `Accept: text/markdown` header
-2. If the server doesn't return `text/markdown`, loads the page via CDP (with full JS rendering) and extracts the main content using [defuddle](https://github.com/kepano/defuddle)
+```mermaid
+graph LR
+    A[HTTP Client] --> B[Hono Server]
+    B --> C[CDP Client]
+    C --> D[Chrome Browser]
+    B --> E[MCP Transport]
+    E --> F[AI Agent / IDE]
+    D --> G[x.com / Web Pages]
+```
 
-- The URL path after `/fetch/` is the target URL. URLs without a scheme default to `https://`
-- Query parameters:
-  - `inPage` (optional) - Set to `true` to run defuddle in the browser page context (has access to computed styles and Shadow DOM). Default: `false` (runs in Node.js)
-- Examples:
-  - `GET /fetch/https://example.com/article`
-  - `GET /fetch/example.com/article?inPage=true`
-- Response:
-  ```json
-  {
-    "url": "https://example.com/article",
-    "source": "content-negotiation | defuddle",
-    "title": "Article Title",
-    "author": "Author Name",
-    "description": "...",
-    "domain": "example.com",
-    "published": "2026-01-01",
-    "content": "# Article Title\n\nArticle body in markdown...",
-    "wordCount": 1234
-  }
-  ```
+## 📖 API Reference
 
-### POST /fetch
-Full version of the fetch endpoint. Accepts the URL in the request body, which avoids issues with complex URLs containing query strings or fragments.
-- Request body:
-  ```json
-  {
-    "url": "http://example.com/path?key=value&foo=bar#section",
-    "inPage": false
-  }
-  ```
-- Response: Same as `GET /fetch/*`
+### Twitter/X Endpoints
 
-### GET /reset
-Resets the browser by navigating to `about:blank`.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/home_timeline` | Home timeline tweets |
+| GET | `/user/:screen_name` | User timeline (`?tab=tweets/replies/media`) |
+| GET | `/mentions` | Mentions for authenticated user |
+| GET | `/user/:screen_name/:tweet_id` | Single tweet with article Markdown |
+| GET | `/thread/:screen_name/:tweet_id` | Tweet thread with replies (`?max=100`) |
+| GET | `/search` | Advanced search (`?q=...&searchType=...`) |
+| POST | `/tweets` | Post a new tweet |
 
-### POST /macro/playback
-Plays back a recorded macro.
-- Request body: Validated against `PlaybackRequest` Zod schema
+### Browser Control Endpoints
 
-### MCP (Model Context Protocol)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/cookies/:domain` | Get cookies for a domain |
+| POST | `/cookies/:domain` | Set cookies (JSON or raw string) |
+| DELETE | `/clear/:domain?` | Clear browser data per domain |
+| GET | `/reset` | Reset browser to `about:blank` |
 
-The server exposes MCP endpoints for tool integration:
+### Page Fetching Endpoints
 
-- **GET /sse** - SSE transport for MCP connections
-- **POST /messages?sessionId=...** - Message handler for SSE transport
-- **POST /mcp** - Streamable HTTP transport for MCP (stateless)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/page/*` | Fetch page HTML or extract via CSS selector |
+| POST | `/page/*` | Extract multiple CSS selectors |
+| GET | `/fetch/*` | Fetch page as Markdown (content-negotiation + defuddle) |
+| POST | `/fetch` | Full fetch endpoint with body-based URL |
 
-Available MCP tools:
-- `readTweet` - Read a tweet by URL, returns article markdown or thread text
+### MCP Endpoints
 
-## Timeout Configuration
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/sse` | SSE transport for MCP |
+| POST | `/messages?sessionId=...` | Message handler for SSE transport |
+| POST | `/mcp` | Streamable HTTP transport (stateless) |
 
-The server implements a multi-layer timeout system to prevent hanging requests:
+## ⚙️ Configuration
 
-### API Layer (HTTP)
-- **Timeout**: 120 seconds
-- **Response**: HTTP 504 with message "Request timeout - the operation took too long"
-- **Excluded routes**: `/sse`, `/mcp`, `/messages` (streaming endpoints)
+Create a `.env` file in the project root:
 
-### Browser Operation Timeouts
-All timeouts are configurable via `TimeoutConfig`:
+```env
+# Chrome DevTools Protocol port (default: 9222)
+CDP_PORT=9222
+
+# Chrome user data directory
+CHROME_USER_DATA_DIR=/path/to/your/chrome/profile
+
+# Run Chrome without GUI
+CHROME_HEADLESS=false
+```
+
+## ⏱️ Timeout Configuration
 
 | Phase | Default | Error Type |
 |-------|---------|------------|
@@ -204,51 +131,30 @@ All timeouts are configurable via `TimeoutConfig`:
 | XHR Wait | 30000ms | `XhrWaitTimeoutError` |
 | Idle Detection | 3000ms | `PageLoadedWithoutMatchError` |
 
-### Session Expiry Detection
-When accessing Twitter endpoints, if the page loads but the expected API request is not detected (indicating session expiry), the server returns:
-- **HTTP 403** with `{ "error": "session_expired", "message": "Twitter session expired, please re-login" }`
+> HTTP API routes (except `/sse`, `/mcp`, `/messages`) have a 120-second timeout. If the browser session expires, Twitter endpoints return HTTP 403 with `{ "error": "session_expired" }`.
 
-## Running the Server
+## 🔌 Chrome Extension
 
-The server runs on port 3000 by default, or on the port specified by the `PORT` environment variable.
+A companion Chrome extension is available for macro recording and cookie sync.
 
-## Advanced Environment Configuration
+Build locally:
 
-The development environment can be customized through a `.env` file in the project root. Below are the available configuration options:
-
-### Chrome/Chromium Settings
-
-```env
-# Chrome DevTools Protocol (CDP) port
-# Default: 9222
-CDP_PORT=9222
-
-# Chrome user data directory
-# If not specified, will use default directory based on OS:
-# - macOS: ~/Library/Application Support/BrowserAgent
-# - Windows: %APPDATA%/Local/BrowserAgent
-# - Linux: ~/.browseragent
-CHROME_USER_DATA_DIR=/path/to/your/chrome/profile
-
-# Run Chrome in headless mode
-# Set to 'true' to run Chrome without GUI
-# Default: false
-CHROME_HEADLESS=false
+```bash
+cd extension
+npm install
+npm run zip      # Chrome
+npm run zip:firefox  # Firefox
 ```
 
-### Example Configuration
+Or download prebuilt zips from [Releases](https://github.com/Leechael/browser-agent/releases).
 
-A complete `.env` file might look like this:
+## 🤝 Contributing
 
-```env
-CDP_PORT=9333
-CHROME_USER_DATA_DIR=/Users/username/Projects/browser-agent/chrome-data
-CHROME_HEADLESS=true
-```
+1. Fork the repo
+2. Create a branch: `git checkout -b feature/your-feature`
+3. Make your changes
+4. Submit a PR with a clear description
 
-### Notes
+## 📄 License
 
-- All settings are optional and have sensible defaults
-- The CDP URL will be automatically injected into your development environment as `process.env.CDP_URL`
-- Chrome/Chromium executable is automatically detected on your system
-- If running in CI/CD environments, it's recommended to set `CHROME_HEADLESS=true`
+MIT © [Leechael Yim](https://github.com/Leechael)
