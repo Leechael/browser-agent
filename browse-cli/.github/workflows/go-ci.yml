@@ -1,0 +1,93 @@
+name: Go CI
+
+on:
+  pull_request:
+    branches: ["**"]
+  push:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -buildvcs=false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download deps
+        run: go mod tidy
+
+      - name: Verify go.mod/go.sum unchanged
+        run: git diff --exit-code go.mod go.sum
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal ./tests)
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Setup Python (for prek)
+        if: ${{ hashFiles('prek.toml') != '' || hashFiles('.pre-commit-config.yaml') != '' || hashFiles('.pre-commit-config.yml') != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install prek
+        if: ${{ hashFiles('prek.toml') != '' || hashFiles('.pre-commit-config.yaml') != '' || hashFiles('.pre-commit-config.yml') != '' }}
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install prek
+          prek --version
+
+      - name: Pre-commit checks (prek)
+        if: ${{ hashFiles('prek.toml') != '' || hashFiles('.pre-commit-config.yaml') != '' || hashFiles('.pre-commit-config.yml') != '' }}
+        run: |
+          prek validate-config
+          prek run --all-files
+
+      - name: Unit tests
+        run: go test ./... -count=1
+
+      - name: BDD tests
+        run: |
+          BDD_TEST_CMD="${{ vars.BDD_TEST_CMD }}"
+          if [ -z "$BDD_TEST_CMD" ]; then
+            BDD_TEST_CMD='go test -tags=bdd ./tests/bdd/... -count=1'
+          fi
+          bash -lc "$BDD_TEST_CMD"
+
+      - name: Load release naming
+        run: |
+          if [ -f release-naming.env ]; then
+            source release-naming.env
+            echo "BUILD_TARGET=${BUILD_TARGET}" >> "$GITHUB_ENV"
+            echo "BINARY_NAME=${BINARY_NAME}" >> "$GITHUB_ENV"
+          else
+            echo "BUILD_TARGET=./cmd/browse" >> "$GITHUB_ENV"
+            echo "BINARY_NAME=browse" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        run: |
+          mkdir -p bin
+          go build -v -o "bin/${BINARY_NAME}" "${BUILD_TARGET}"
