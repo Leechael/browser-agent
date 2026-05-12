@@ -60,12 +60,7 @@ func NewRootCmd() *cobra.Command {
 
 	cmd.AddCommand(newStatusCmd())
 	cmd.AddCommand(newFetchCmd())
-	cmd.AddCommand(newPageCmd())
 	cmd.AddCommand(newTweetCmd())
-	cmd.AddCommand(newUserCmd())
-	cmd.AddCommand(newSearchCmd())
-	cmd.AddCommand(newTimelineCmd())
-	cmd.AddCommand(newPostCmd())
 	cmd.AddCommand(newResetCmd())
 
 	// Manual completion command so we can assign it to the system group.

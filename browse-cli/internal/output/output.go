@@ -146,6 +146,32 @@ func (f *Formatter) printHumanMap(w io.Writer, m map[string]interface{}) error {
 		return nil
 	}
 
+	// If this looks like a thread result (mainTweet + replies).
+	if mainTweet, ok := m["mainTweet"].(map[string]interface{}); ok {
+		if text, ok := getString(mainTweet, "text"); ok {
+			if err := f.printHumanTweet(w, mainTweet, text); err != nil {
+				return err
+			}
+		}
+		if replies, ok := m["replies"].([]interface{}); ok && len(replies) > 0 {
+			fmt.Fprintf(w, "\n%d replies\n", len(replies))
+			if total, ok := getFloat(m, "totalCount"); ok {
+				fmt.Fprintf(w, "(total: %.0f)\n", total)
+			}
+			fmt.Fprintln(w)
+			for _, r := range replies {
+				if replyMap, ok := r.(map[string]interface{}); ok {
+					if text, ok := getString(replyMap, "text"); ok {
+						if err := f.printHumanTweet(w, replyMap, text); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		return nil
+	}
+
 	// If this looks like a tweet.
 	if text, ok := getString(m, "text"); ok {
 		return f.printHumanTweet(w, m, text)
@@ -163,18 +189,85 @@ func (f *Formatter) printHumanMap(w io.Writer, m map[string]interface{}) error {
 }
 
 func (f *Formatter) printHumanTweet(w io.Writer, m map[string]interface{}, text string) error {
-	if name, ok := getString(m, "name"); ok && name != "" {
-		fmt.Fprintf(w, "@%s (%s)\n", getStringDefault(m, "screen_name", ""), name)
-	} else if sn, ok := getString(m, "screen_name"); ok {
-		fmt.Fprintf(w, "@%s\n", sn)
+	author := m["author"]
+	name, username := "", ""
+	if authorMap, ok := author.(map[string]interface{}); ok {
+		name = getStringDefault(authorMap, "name", "")
+		username = getStringDefault(authorMap, "username", "")
 	}
+	if username == "" {
+		username = getStringDefault(m, "screen_name", "")
+	}
+
+	// Header line: Name (@username)
+	if name != "" && username != "" {
+		fmt.Fprintf(w, "%s (@%s)\n", name, username)
+	} else if username != "" {
+		fmt.Fprintf(w, "@%s\n", username)
+	} else if name != "" {
+		fmt.Fprintf(w, "%s\n", name)
+	}
+
 	fmt.Fprintln(w, text)
-	if created, ok := getString(m, "created_at"); ok {
-		fmt.Fprintf(w, "  %s\n", created)
+
+	// Stats line
+	parts := []string{}
+	if created, ok := getString(m, "created_at"); ok && created != "" {
+		parts = append(parts, created)
 	}
+	if v, ok := getFloat(m, "reply_count"); ok {
+		parts = append(parts, fmt.Sprintf("%.0f replies", v))
+	}
+	if v, ok := getFloat(m, "retweet_count"); ok {
+		parts = append(parts, fmt.Sprintf("%.0f retweets", v))
+	}
+	if v, ok := getFloat(m, "like_count"); ok {
+		parts = append(parts, fmt.Sprintf("%.0f likes", v))
+	}
+	if v, ok := getString(m, "view_count"); ok && v != "" {
+		parts = append(parts, fmt.Sprintf("%s views", v))
+	}
+	if len(parts) > 0 {
+		fmt.Fprintf(w, "%s\n", joinParts(parts, " · "))
+	}
+
+	// URL
 	if url, ok := getString(m, "url"); ok && url != "" {
-		fmt.Fprintf(w, "  %s\n", url)
+		fmt.Fprintf(w, "%s\n", url)
 	}
+
+	// Quoted tweet
+	if quote, ok := m["quote_for"].(map[string]interface{}); ok {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "┌ Quoted tweet:")
+		quoteText := getStringDefault(quote, "text", "")
+		quoteAuthor := quote["author"]
+		qName, qUser := "", ""
+		if qm, ok := quoteAuthor.(map[string]interface{}); ok {
+			qName = getStringDefault(qm, "name", "")
+			qUser = getStringDefault(qm, "username", "")
+		}
+		if qName != "" && qUser != "" {
+			fmt.Fprintf(w, "│ %s (@%s)\n", qName, qUser)
+		} else if qUser != "" {
+			fmt.Fprintf(w, "│ @%s\n", qUser)
+		}
+		for _, line := range splitLines(quoteText) {
+			fmt.Fprintf(w, "│ %s\n", line)
+		}
+		qParts := []string{}
+		if created, ok := getString(quote, "created_at"); ok && created != "" {
+			qParts = append(qParts, created)
+		}
+		if v, ok := getFloat(quote, "like_count"); ok {
+			qParts = append(qParts, fmt.Sprintf("%.0f likes", v))
+		}
+		if len(qParts) > 0 {
+			fmt.Fprintf(w, "│ %s\n", joinParts(qParts, " · "))
+		}
+		fmt.Fprintln(w, "└")
+	}
+
 	fmt.Fprintln(w)
 	return nil
 }
@@ -239,4 +332,30 @@ func getFloat(m map[string]interface{}, key string) (float64, bool) {
 		return float64(n), true
 	}
 	return 0, false
+}
+
+func joinParts(parts []string, sep string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	result := parts[0]
+	for i := 1; i < len(parts); i++ {
+		result += sep + parts[i]
+	}
+	return result
+}
+
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines = append(lines, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		lines = append(lines, s[start:])
+	}
+	return lines
 }
