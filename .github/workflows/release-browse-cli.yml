@@ -1,4 +1,4 @@
-name: Release on Tag
+name: Release Browse CLI
 
 on:
   push:
@@ -17,6 +17,9 @@ permissions:
 jobs:
   build-release:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: browse-cli
     env:
       GOFLAGS: -buildvcs=false
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -30,24 +33,25 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: browse-cli/go.mod
           cache: true
+          cache-dependency-path: browse-cli/go.sum
 
       - name: Setup Python (for prek)
-        if: ${{ hashFiles('prek.toml') != '' }}
+        if: ${{ hashFiles('browse-cli/prek.toml') != '' }}
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
       - name: Install prek
-        if: ${{ hashFiles('prek.toml') != '' }}
+        if: ${{ hashFiles('browse-cli/prek.toml') != '' }}
         run: |
           python -m pip install --upgrade pip
           python -m pip install prek
           prek --version
 
       - name: Run pre-commit checks (prek)
-        if: ${{ hashFiles('prek.toml') != '' }}
+        if: ${{ hashFiles('browse-cli/prek.toml') != '' }}
         run: |
           prek validate-config
           prek run --all-files
@@ -103,9 +107,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          body_path: dist/CHANGELOG.md
+          name: "Browse CLI ${{ env.RELEASE_TAG }}"
+          body_path: browse-cli/dist/CHANGELOG.md
           files: |
-            dist/*.tar.gz
-            dist/checksums.txt
-            dist/CHANGELOG.md
+            browse-cli/dist/*.tar.gz
+            browse-cli/dist/checksums.txt
           prerelease: ${{ contains(env.RELEASE_TAG, '-alpha.') || contains(env.RELEASE_TAG, '-beta.') || contains(env.RELEASE_TAG, '-rc.') }}
