@@ -71,6 +71,8 @@ function createMcpServer() {
 
 const app = new Hono()
 
+app.get('/health', (ctx) => ctx.json({ ok: true }))
+
 app.use(logger())
 
 // Request timeout middleware (120 seconds)
@@ -440,6 +442,8 @@ app.get('/reset', async (ctx) => {
   await openPage({ url: 'about:blank' })
   return ctx.json({ "success": true })
 })
+
+app.get('/', (ctx) => ctx.json({ ok: true }))
 
 // Cookie management routes
 app.get('/cookies/:domain', async (ctx) => {

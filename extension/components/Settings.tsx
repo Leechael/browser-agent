@@ -49,11 +49,14 @@ export default function Settings({ settings: initialSettings, onSettingsChange }
     setMessage(null)
 
     try {
-      await browser.runtime.sendMessage({
+      const response = await browser.runtime.sendMessage({
         type: 'UPDATE_SETTINGS',
         payload: settings,
         timestamp: Date.now(),
       })
+      if (response && typeof response === 'object' && response.error) {
+        throw new Error(response.error)
+      }
       setMessage({ type: 'success', text: 'Settings saved' })
       onSettingsChange()
     } catch (error) {
@@ -68,7 +71,7 @@ export default function Settings({ settings: initialSettings, onSettingsChange }
     setMessage(null)
 
     try {
-      const response = await fetch(`${settings.serverUrl}/`, {
+      const response = await fetch(`${settings.serverUrl}/health`, {
         method: 'GET',
         signal: AbortSignal.timeout(5000),
       })
