@@ -58,25 +58,29 @@ jobs:
           previous_tag=$(git tag -l "v*" --sort=-version:refname | grep -v "^${current_tag}$" | head -n 1 || true)
 
           {
-            echo "# Changelog"
+            echo "# Extension Release ${current_tag}"
             echo
-            echo "## ${current_tag}"
+            echo "## What's Changed"
             echo
             if [ -n "${previous_tag}" ]; then
-              echo "Changes since ${previous_tag}:"
-              echo
-              git log --pretty='- %s (%h)' "${previous_tag}..${current_tag}"
+              git log --pretty='- %s (%h)' "${previous_tag}..${current_tag}" -- extension/ || true
             else
               echo "Initial release changes:"
               echo
-              git log --pretty='- %s (%h)' "${current_tag}"
+              git log --pretty='- %s (%h)' "${current_tag}" -- extension/ || true
             fi
+            echo
+            echo "## Artifacts"
+            echo
+            echo "- Chrome extension (.zip)"
+            echo "- Firefox extension (.zip)"
           } > dist/CHANGELOG.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          name: "Extension Release ${{ env.RELEASE_TAG }}"
           body_path: dist/CHANGELOG.md
           files: dist/*.zip
           prerelease: ${{ contains(env.RELEASE_TAG, '-alpha.') || contains(env.RELEASE_TAG, '-beta.') || contains(env.RELEASE_TAG, '-rc.') }}
