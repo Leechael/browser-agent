@@ -264,19 +264,40 @@ func (f *Formatter) printHumanTweet(w io.Writer, m map[string]interface{}, text 
 		} else if qUser != "" {
 			fmt.Fprintf(w, "│ @%s\n", qUser)
 		}
+		// URL for quoted tweet.
+		if qUser != "" {
+			if qid, ok := getString(quote, "id"); ok && qid != "" {
+				fmt.Fprintf(w, "│ https://x.com/%s/status/%s\n", qUser, qid)
+			}
+		}
+		fmt.Fprintln(w, "│")
 		for _, line := range splitLines(quoteText) {
-			fmt.Fprintf(w, "│ %s\n", line)
+			if line == "" {
+				fmt.Fprintln(w, "│")
+			} else {
+				fmt.Fprintf(w, "│ %s\n", line)
+			}
 		}
 		qParts := []string{}
 		if created, ok := getString(quote, "created_at"); ok && created != "" {
 			qParts = append(qParts, created)
 		}
+		if v, ok := getFloat(quote, "reply_count"); ok {
+			qParts = append(qParts, fmt.Sprintf("%.0f replies", v))
+		}
+		if v, ok := getFloat(quote, "retweet_count"); ok {
+			qParts = append(qParts, fmt.Sprintf("%.0f retweets", v))
+		}
 		if v, ok := getFloat(quote, "like_count"); ok {
 			qParts = append(qParts, fmt.Sprintf("%.0f likes", v))
+		}
+		if v, ok := getString(quote, "view_count"); ok && v != "" {
+			qParts = append(qParts, fmt.Sprintf("%s views", v))
 		}
 		if len(qParts) > 0 {
 			fmt.Fprintf(w, "│ %s\n", joinParts(qParts, " · "))
 		}
+		fmt.Fprintln(w, "│")
 		fmt.Fprintln(w, "└")
 	}
 
