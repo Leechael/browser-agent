@@ -1,0 +1,9 @@
+[hooks]
+pre-commit = ["fmt", "vet", "test"]
+pre-push = ["ci"]
+
+[commands]
+fmt = "gofmt -l ./cmd ./internal ./tests"
+vet = "go vet ./..."
+test = "go test ./... -count=1"
+ci = "make ci"
