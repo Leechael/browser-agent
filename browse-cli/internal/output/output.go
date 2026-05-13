@@ -154,12 +154,15 @@ func (f *Formatter) printHumanMap(w io.Writer, m map[string]interface{}) error {
 			}
 		}
 		if replies, ok := m["replies"].([]interface{}); ok && len(replies) > 0 {
-			fmt.Fprintf(w, "\n%d replies\n", len(replies))
+			totalHint := ""
 			if total, ok := getFloat(m, "totalCount"); ok {
-				fmt.Fprintf(w, "(total: %.0f)\n", total)
+				totalHint = fmt.Sprintf(" (%.0f total)", total)
 			}
-			fmt.Fprintln(w)
-			for _, r := range replies {
+			fmt.Fprintf(w, "\n-- %d replies%s ---\n", len(replies), totalHint)
+			for i, r := range replies {
+				if i > 0 {
+					fmt.Fprintln(w, "---")
+				}
 				if replyMap, ok := r.(map[string]interface{}); ok {
 					if text, ok := getString(replyMap, "text"); ok {
 						if err := f.printHumanTweet(w, replyMap, text); err != nil {
