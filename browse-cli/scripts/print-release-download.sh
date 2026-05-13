@@ -12,8 +12,8 @@ fi
 # shellcheck disable=SC1090
 source "$env_file"
 
-if [[ -z "${ARTIFACT_GLOB:-}" ]]; then
-  echo "ARTIFACT_GLOB not set in release-naming.env" >&2
+if [[ -z "${BINARY_NAME:-}" ]]; then
+  echo "BINARY_NAME not set in release-naming.env" >&2
   exit 1
 fi
 

@@ -71,7 +71,10 @@ func (c *Client) get(path string, out interface{}) error {
 		body, _ := io.ReadAll(resp.Body)
 		return &APIError{StatusCode: resp.StatusCode, Message: string(body)}
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
 }
 
 func (c *Client) post(path string, body interface{}, out interface{}) error {
@@ -194,6 +197,18 @@ type PageParams struct {
 
 // Page fetches a web page with optional CSS selector.
 func (c *Client) Page(params PageParams) (map[string]interface{}, error) {
+	// Complex URLs with query/fragment need POST fallback.
+	if strings.ContainsAny(params.URL, "?#") {
+		body := map[string]interface{}{"url": params.URL}
+		if params.Selector != "" {
+			body["selector"] = params.Selector
+		}
+		var result map[string]interface{}
+		if err := c.post("/page", body, &result); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
 	u := "/page/" + params.URL
 	v := url.Values{}
 	if params.Selector != "" {

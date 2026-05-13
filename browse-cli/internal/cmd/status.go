@@ -21,7 +21,10 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 
-			home, _ := os.UserHomeDir()
+			home, homeErr := os.UserHomeDir()
+			if homeErr != nil {
+				return fmt.Errorf("cannot determine home directory: %w", homeErr)
+			}
 			configPath := filepath.Join(home, ".config", "browse-cli", "config.toml")
 
 			cfg, err := config.Load()

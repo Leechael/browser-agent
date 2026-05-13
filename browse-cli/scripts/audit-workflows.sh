@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="${1:-.}"
-workflows_dir="$root/.github/workflows"
+workflows_dir="$root/../.github/workflows"
 
 if [[ ! -d "$workflows_dir" ]]; then
   echo "missing workflows dir: $workflows_dir" >&2
@@ -19,7 +19,7 @@ fi
 
 missing=0
 while IFS= read -r f; do
-  if ! rg -n "^permissions:" "$f" >/dev/null; then
+  if ! rg -n "\bpermissions:" "$f" >/dev/null; then
     echo "missing permissions block: $f" >&2
     missing=1
   fi

@@ -1,6 +1,7 @@
 package client_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -44,10 +45,9 @@ func TestGetStatusAuthError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	var apiErr *client.APIError
-	if ok := err.(*client.APIError); ok == nil {
+	if !errors.As(err, &apiErr) {
 		t.Fatalf("expected *APIError, got %T", err)
 	}
-	_ = apiErr
 }
 
 func TestFetch(t *testing.T) {

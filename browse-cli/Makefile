@@ -46,6 +46,7 @@ ci:
 	go vet ./...
 	go test ./... -count=1
 	go test -tags=bdd ./tests/bdd/... -count=1
+	mkdir -p $(BIN_DIR)
 	go build -v -ldflags="-s -w -X $(VERSION_VAR)=$(VERSION)" -o $(BIN_PATH) $(CMD)
 
 build:

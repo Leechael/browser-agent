@@ -87,7 +87,9 @@ func (f *Formatter) applyJQ(w io.Writer, data interface{}) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(w, string(out))
+		if _, err := fmt.Fprintln(w, string(out)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

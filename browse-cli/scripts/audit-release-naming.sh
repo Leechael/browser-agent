@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_dir="${1:-.}"
-workflows_dir="$repo_dir/.github/workflows"
+workflows_dir="$repo_dir/../.github/workflows"
 env_file="$repo_dir/release-naming.env"
 
 if [[ ! -d "$workflows_dir" ]]; then
@@ -34,17 +34,17 @@ if rg -n "your-cli|your-cli-v" "$workflows_dir" >/dev/null; then
 fi
 
 tag_glob="${TAG_PREFIX}*"
-if ! rg -n --fixed-strings "$tag_glob" "$workflows_dir/release-on-tag.yml" >/dev/null; then
-  echo "release-on-tag.yml trigger does not match TAG_PREFIX pattern: $tag_glob" >&2
+if ! rg -n --fixed-strings "$tag_glob" "$workflows_dir/release-browse-cli.yml" >/dev/null; then
+  echo "release-browse-cli.yml trigger does not match TAG_PREFIX pattern: $tag_glob" >&2
   exit 1
 fi
 
 release_command="$workflows_dir/release-command.yml"
-release_on_tag="$workflows_dir/release-on-tag.yml"
+release_browse_cli="$workflows_dir/release-browse-cli.yml"
 next_version="$repo_dir/scripts/next-version.sh"
 download_helper="$repo_dir/scripts/print-release-download.sh"
 
-for f in "$release_command" "$release_on_tag" "$next_version" "$download_helper"; do
+for f in "$release_command" "$release_browse_cli" "$next_version" "$download_helper"; do
   if [[ ! -f "$f" ]]; then
     echo "missing required file: $f" >&2
     exit 1
@@ -61,23 +61,28 @@ if ! rg -n "!release.*patch.*minor.*major" "$release_command" >/dev/null; then
   exit 1
 fi
 
-if ! rg -n "createWorkflowDispatch|workflow_id:\s*'release-on-tag\.yml'" "$release_command" >/dev/null; then
-  echo "release-command.yml must dispatch release-on-tag.yml after tag creation" >&2
+# Must dispatch both extension and browse-cli release workflows.
+if ! rg -n "release-extension\.yml" "$release_command" >/dev/null; then
+  echo "release-command.yml must dispatch release-extension.yml" >&2
+  exit 1
+fi
+if ! rg -n "release-browse-cli\.yml" "$release_command" >/dev/null; then
+  echo "release-command.yml must dispatch release-browse-cli.yml" >&2
   exit 1
 fi
 
-if ! rg -n "CHANGELOG\.md|body_path:\s*dist/CHANGELOG\.md" "$release_on_tag" >/dev/null; then
-  echo "release-on-tag.yml must generate changelog and publish it as release notes" >&2
+if ! rg -n "CHANGELOG\.md|body_path:\s*dist/CHANGELOG\.md" "$release_browse_cli" >/dev/null; then
+  echo "release-browse-cli.yml must generate changelog and publish it as release notes" >&2
   exit 1
 fi
 
-if ! rg -n "BINARY_NAME|BUILD_TARGET|ARTIFACT_GLOB" "$release_on_tag" >/dev/null; then
-  echo "release-on-tag.yml must read naming contract fields" >&2
+if ! rg -n "BINARY_NAME|BUILD_TARGET|ARTIFACT_GLOB" "$release_browse_cli" >/dev/null; then
+  echo "release-browse-cli.yml must read naming contract fields" >&2
   exit 1
 fi
 
-if ! rg -n "ARTIFACT_GLOB" "$download_helper" >/dev/null; then
-  echo "print-release-download.sh must use ARTIFACT_GLOB from release-naming.env" >&2
+if ! rg -n "BINARY_NAME" "$download_helper" >/dev/null; then
+  echo "print-release-download.sh must use BINARY_NAME from release-naming.env" >&2
   exit 1
 fi
 

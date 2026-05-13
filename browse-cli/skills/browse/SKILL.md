@@ -39,7 +39,7 @@ cd browse-cli && make install
 # Configure
 mkdir -p ~/.config/browse-cli
 cat > ~/.config/browse-cli/config.toml << 'EOF'
-url   = "https://browse.oyodeo.com"
+url   = "https://your-domain.com"
 token = "your-bearer-token"
 EOF
 ```
@@ -87,45 +87,13 @@ browse fetch example.com/article --in-page
 }
 ```
 
-### browse page <url>
-
-Fetch web page with CSS selector extraction.
-
-**Options:**
-- `--selector` — CSS selector to extract
-
-**Example:**
-```bash
-browse page https://example.com --selector "article.main"
-```
-
 ---
 
 ## Part 2: Twitter/X Content
 
-### browse timeline home
+### browse tweet get <url>
 
-Retrieves the home timeline tweets.
-
-### browse timeline mentions
-
-Retrieves mentions for the authenticated user.
-
-### browse user <screen_name>
-
-Retrieves tweets from a specific user's timeline.
-
-**Options:**
-- `--tab` — `tweets` (default), `replies`, `media`
-
-**Example:**
-```bash
-browse user elonmusk --tab=media
-```
-
-### browse tweet get <screen_name> <tweet_id>
-
-Retrieves a specific tweet with full metadata.
+Retrieves a specific tweet with full metadata. Accepts a full x.com/twitter.com URL.
 
 **For article tweets, includes:**
 - `article` — Resolved blocks with inlined entity data
@@ -135,10 +103,10 @@ Retrieves a specific tweet with full metadata.
 
 **Example:**
 ```bash
-browse tweet get elonmusk 1234567890
+browse tweet get https://x.com/elonmusk/status/1234567890
 ```
 
-### browse tweet thread <screen_name> <tweet_id>
+### browse tweet thread <url>
 
 Retrieves a tweet thread with replies.
 
@@ -155,65 +123,9 @@ Retrieves a tweet thread with replies.
 }
 ```
 
-### browse search <query>
-
-Search tweets with advanced filters.
-
-**Options:**
-- `--type` — `top` (default), `latest`, `photos`, `videos`
-- `--from` — Filter by author
-- `--to` — Filter by recipient
-- `--since` — Start date (YYYY-MM-DD)
-- `--until` — End date (YYYY-MM-DD)
-- `--filter` — `media`, `images`, `videos`, `links`, `replies`, `native_video`
-- `--min-retweets` — Minimum retweet count
-- `--min-faves` — Minimum favorite count
-- `--min-replies` — Minimum reply count
-- `--lang` — Language code
-
-**Example:**
-```bash
-browse search "web3" --from=vitalikbuterin --since=2026-01-01 --min-retweets=100
-```
-
-### browse post <text>
-
-Posts a new tweet.
-
-**Example:**
-```bash
-browse post "Hello from browse CLI"
-```
-
 ---
 
 ## Part 3: Browser Management
-
-### browse cookies get <domain>
-
-Retrieves cookies for a specific domain.
-
-**Options:**
-- `--urls` — Comma-separated list of specific URLs
-
-### browse cookies set <domain>
-
-Sets cookies for a specific domain.
-
-**Options:**
-- `--raw` — Raw cookie string (e.g. `cookie1=value1; cookie2=value2`)
-
-### browse clear [domain]
-
-Clears browser data (cookies, cache, storage, etc.).
-
-**Options:**
-- `--cookies`
-- `--local-storage`
-- `--session-storage`
-- `--indexed-db`
-- `--cache`
-- `--all`
 
 ### browse reset
 
@@ -232,25 +144,13 @@ browse fetch https://example.com/article --json --jq '.content'
 ### Get specific tweet
 
 ```bash
-browse tweet get elonmusk 1234567890 --json
-```
-
-### Get user timeline
-
-```bash
-browse user elonmusk --tab=tweets --json
-```
-
-### Search tweets
-
-```bash
-browse search "AI" --lang=en --min-retweets=50 --json
+browse tweet get https://x.com/elonmusk/status/1234567890 --json
 ```
 
 ### Get thread with replies
 
 ```bash
-browse tweet thread elonmusk 1234567890 --max=50 --json
+browse tweet thread https://x.com/elonmusk/status/1234567890 --max=50 --json
 ```
 
 ---
@@ -260,14 +160,8 @@ browse tweet thread elonmusk 1234567890 --max=50 --json
 | Scenario | Command | Notes |
 |----------|---------|-------|
 | General article/blog | `browse fetch <url>` | Clean Markdown extraction |
-| Specific tweet | `browse tweet get <user> <id>` | Structured tweet data |
-| Thread with replies | `browse tweet thread <user> <id>` | Main tweet + replies array |
-| User timeline | `browse user <screen_name>` | Use `--tab` for tweets/replies/media |
-| Search tweets | `browse search <query>` | Advanced filters available |
-| Home timeline | `browse timeline home` | Your own timeline |
-| Mentions | `browse timeline mentions` | Your notifications |
-| Post tweet | `browse post <text>` | POST with text body |
-| CSS extraction | `browse page <url>` | When you need specific elements |
+| Specific tweet | `browse tweet get <url>` | Structured tweet data |
+| Thread with replies | `browse tweet thread <url>` | Main tweet + replies array |
 
 ---
 
@@ -284,4 +178,3 @@ browse tweet thread elonmusk 1234567890 --max=50 --json
 
 - The API runs on a browser-agent instance with a logged-in Chrome profile
 - `browse status` checks connectivity and config validity
-- For saving tweets to Roam Research, use the dedicated `tweet-bookmark` skill
