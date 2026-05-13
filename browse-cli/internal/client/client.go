@@ -197,18 +197,6 @@ type PageParams struct {
 
 // Page fetches a web page with optional CSS selector.
 func (c *Client) Page(params PageParams) (map[string]interface{}, error) {
-	// Complex URLs with query/fragment need POST fallback.
-	if strings.ContainsAny(params.URL, "?#") {
-		body := map[string]interface{}{"url": params.URL}
-		if params.Selector != "" {
-			body["selector"] = params.Selector
-		}
-		var result map[string]interface{}
-		if err := c.post("/page", body, &result); err != nil {
-			return nil, err
-		}
-		return result, nil
-	}
 	u := "/page/" + params.URL
 	v := url.Values{}
 	if params.Selector != "" {

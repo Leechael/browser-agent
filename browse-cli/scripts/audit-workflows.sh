@@ -19,7 +19,7 @@ fi
 
 missing=0
 while IFS= read -r f; do
-  if ! rg -n "\bpermissions:" "$f" >/dev/null; then
+  if ! rg -n "^\s*permissions:" "$f" >/dev/null; then
     echo "missing permissions block: $f" >&2
     missing=1
   fi
