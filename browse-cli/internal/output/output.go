@@ -208,7 +208,21 @@ func (f *Formatter) printHumanTweet(w io.Writer, m map[string]interface{}, text 
 		fmt.Fprintf(w, "%s\n", name)
 	}
 
+	// URL immediately below header.
+	if urlStr, ok := getString(m, "url"); ok && urlStr != "" {
+		fmt.Fprintf(w, "%s\n", urlStr)
+	} else if username != "" {
+		if id, ok := getString(m, "id"); ok && id != "" {
+			fmt.Fprintf(w, "https://x.com/%s/status/%s\n", username, id)
+		}
+	}
+
+	// Blank line before text.
+	fmt.Fprintln(w)
 	fmt.Fprintln(w, text)
+
+	// Blank line before stats.
+	fmt.Fprintln(w)
 
 	// Stats line
 	parts := []string{}
@@ -229,11 +243,6 @@ func (f *Formatter) printHumanTweet(w io.Writer, m map[string]interface{}, text 
 	}
 	if len(parts) > 0 {
 		fmt.Fprintf(w, "%s\n", joinParts(parts, " · "))
-	}
-
-	// URL
-	if url, ok := getString(m, "url"); ok && url != "" {
-		fmt.Fprintf(w, "%s\n", url)
 	}
 
 	// Quoted tweet
