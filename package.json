@@ -19,7 +19,7 @@
     "chrome-remote-interface": "^0.33.3",
     "defuddle": "^0.14.0",
     "fetch-to-node": "^2.1.0",
-    "hono": "^4.11.0",
+    "hono": "^4.12.18",
     "hono-mcp-server-sse-transport": "^0.0.7",
     "linkedom": "^0.18.12",
     "rxjs": "^7.8.1",
