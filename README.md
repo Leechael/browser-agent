@@ -75,7 +75,7 @@ graph LR
 | GET | `/user/:screen_name` | User timeline (`?tab=tweets/replies/media`) |
 | GET | `/mentions` | Mentions for authenticated user |
 | GET | `/user/:screen_name/:tweet_id` | Single tweet with article Markdown |
-| GET | `/thread/:screen_name/:tweet_id` | Tweet thread with replies (`?max=100`) |
+| GET | `/thread/:screen_name/:tweet_id` | Tweet thread with replies (`?max=100`, or paged with `?page=true` / `?cursor=...`) |
 | GET | `/search` | Advanced search (`?q=...&searchType=...`) |
 | POST | `/tweets` | Post a new tweet |
 
