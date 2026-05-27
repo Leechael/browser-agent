@@ -1,4 +1,4 @@
-import { type PageOptions, openPage, waitForMatch, PageLoadedWithoutMatchError, DEFAULT_TIMEOUTS } from '../common'
+import { type PageOptions, openPage, DEFAULT_TIMEOUTS, type ObservableXHR, type XhrResponse } from '../common'
 import { extractTweet } from './transform'
 import { SessionExpiredError } from './readTweet'
 
@@ -6,6 +6,8 @@ export type ReadThreadOptions = {
   screen_name: string
   tweet_id: string
   maxTweets?: number  // 默认 100
+  cursor?: string
+  page?: boolean
 } & Omit<PageOptions, 'url'>
 
 export interface ThreadResult {
@@ -13,74 +15,60 @@ export interface ThreadResult {
   replies: any[]
   totalCount: number
   hasMore: boolean
+  nextCursor?: string | null
 }
 
-interface ParsedReplies {
+interface ParsedTweets {
   tweets: any[]
+  bottomCursor: string | null
 }
 
-function extractRepliesFromResponse(body: any): ParsedReplies {
-  const instructions = (body?.data?.threaded_conversation_with_injections_v2?.instructions || [])
-    .filter((i: any) => i.type === 'TimelineAddEntries' || i.type === 'TimelineAddToModule')
+function safeExtractTweet(tweetResult: any): any | null {
+  try {
+    return tweetResult ? extractTweet(tweetResult) : null
+  } catch {
+    return null
+  }
+}
 
-  const tweets: any[] = []
+function collectTweetResultsFromBody(body: any): any[] {
+  const instructions = body?.data?.threaded_conversation_with_injections_v2?.instructions || []
+  const tweetResults: any[] = []
+
   for (const instruction of instructions) {
     if (instruction.type === 'TimelineAddToModule') {
-      const moduleItems = instruction.moduleItems
-      for (const moduleItem of moduleItems) {
-        const itemContent = moduleItem.item?.itemContent
-        if (itemContent?.__typename === 'TimelineTweet') {
-          const tweetResult = itemContent.tweet_results?.result
-          if (tweetResult) {
-            tweets.push(extractTweet(tweetResult))
-          }
-        }
+      for (const moduleItem of instruction.moduleItems || []) {
+        const tweetResult = moduleItem.item?.itemContent?.tweet_results?.result
+        if (tweetResult) tweetResults.push(tweetResult)
       }
-    } else if (instruction.type === 'TimelineAddEntries') {
+      continue
+    }
 
-      const entries = instruction.entries || []
+    if (instruction.type !== 'TimelineAddEntries') continue
 
-      for (const entry of entries) {
-        const content = entry.content
+    for (const entry of instruction.entries || []) {
+      const itemTweetResult = entry.content?.itemContent?.tweet_results?.result
+      if (itemTweetResult) tweetResults.push(itemTweetResult)
 
-        // 跳过主推文（已单独处理）和 cursor
-        if (entry.entryId?.startsWith('tweet-')) {
-          continue
-        }
-
-        // 处理回复模块 (TimelineTimelineModule)
-        if (content?.__typename === 'TimelineTimelineModule' || content?.entryType === 'TimelineTimelineModule') {
-          const items = content.items || []
-
-          for (const item of items) {
-            const itemContent = item.item?.itemContent
-
-            if (itemContent?.__typename === 'TimelineTweet') {
-              const tweetResult = itemContent.tweet_results?.result
-              if (tweetResult) {
-                tweets.push(extractTweet(tweetResult))
-              }
-            }
-          }
-        }
+      for (const item of entry.content?.items || []) {
+        const tweetResult = item.item?.itemContent?.tweet_results?.result
+        if (tweetResult) tweetResults.push(tweetResult)
       }
     }
   }
 
-  return { tweets }
+  return tweetResults
 }
 
-function extractMainTweet(body: any, tweetId: string): any | null {
-  const instructions = (body?.data?.threaded_conversation_with_injections_v2?.instructions || [])
-    .filter((i: any) => i.type === 'TimelineAddEntries')
+function extractBottomCursor(body: any): string | null {
+  const instructions = body?.data?.threaded_conversation_with_injections_v2?.instructions || []
 
-  const entries = (instructions[0] || { entries: [] }).entries || []
+  for (const instruction of instructions) {
+    if (instruction.type !== 'TimelineAddEntries') continue
 
-  for (const entry of entries) {
-    if (entry.entryId === `tweet-${tweetId}`) {
-      const tweetResult = entry.content?.itemContent?.tweet_results?.result
-      if (tweetResult) {
-        return extractTweet(tweetResult)
+    for (const entry of instruction.entries || []) {
+      if (entry.content?.cursorType === 'Bottom' && entry.content?.value) {
+        return entry.content.value
       }
     }
   }
@@ -88,48 +76,144 @@ function extractMainTweet(body: any, tweetId: string): any | null {
   return null
 }
 
+function extractTweetsFromResponse(body: any, mainTweetId: string): ParsedTweets {
+  const tweets = collectTweetResultsFromBody(body)
+    .map(safeExtractTweet)
+    .filter((tweet): tweet is any => !!tweet && tweet.id !== mainTweetId)
+
+  return {
+    tweets,
+    bottomCursor: extractBottomCursor(body),
+  }
+}
+
+function extractMainTweet(body: any, tweetId: string): any | null {
+  for (const tweetResult of collectTweetResultsFromBody(body)) {
+    const tweet = safeExtractTweet(tweetResult)
+    if (tweet?.id === tweetId) return tweet
+  }
+
+  return null
+}
+
+function waitForTweetDetail(xhr$: ObservableXHR, timeoutMs: number): Promise<XhrResponse | null> {
+  return new Promise(resolve => {
+    let resolved = false
+    const timeoutHandle = setTimeout(() => {
+      if (resolved) return
+      resolved = true
+      subscription.unsubscribe()
+      resolve(null)
+    }, timeoutMs)
+
+    const subscription = xhr$.subscribe({
+      next(value) {
+        if (resolved) return
+        if (!value || typeof (value as XhrResponse).url !== 'string') return
+
+        const xhrResponse = value as XhrResponse
+        if (xhrResponse.url.includes('TweetDetail')) {
+          resolved = true
+          clearTimeout(timeoutHandle)
+          subscription.unsubscribe()
+          resolve(xhrResponse)
+        }
+      },
+      error() {
+        if (resolved) return
+        resolved = true
+        clearTimeout(timeoutHandle)
+        resolve(null)
+      },
+    })
+  })
+}
+
+function buildCursorUrl(templateUrl: string, cursor: string): string {
+  const url = new URL(templateUrl)
+  const variables = JSON.parse(url.searchParams.get('variables') || '{}')
+  variables.cursor = cursor
+  url.searchParams.set('variables', JSON.stringify(variables))
+  return url.toString()
+}
+
+async function fetchTweetDetailPage(
+  Runtime: any,
+  templateUrl: string,
+  cursor: string,
+  requestHeaders: Record<string, string> = {}
+): Promise<any | null> {
+  const pageUrl = buildCursorUrl(templateUrl, cursor)
+  const authorization = requestHeaders.authorization || requestHeaders.Authorization
+  if (!authorization) return null
+
+  const result = await Runtime.evaluate({
+    expression: `
+      (async function() {
+        const ct0 = document.cookie.split('; ').find(item => item.startsWith('ct0='))?.slice(4);
+        if (!ct0) return { ok: false, status: 0, text: '' };
+
+        const response = await fetch(${JSON.stringify(pageUrl)}, {
+          credentials: 'include',
+          headers: {
+            authorization: ${JSON.stringify(authorization)},
+            'x-csrf-token': ct0,
+            'x-twitter-active-user': ${JSON.stringify(requestHeaders['x-twitter-active-user'] || 'yes')},
+            'x-twitter-auth-type': ${JSON.stringify(requestHeaders['x-twitter-auth-type'] || 'OAuth2Session')},
+            'x-twitter-client-language': ${JSON.stringify(requestHeaders['x-twitter-client-language'] || 'en')},
+            'content-type': 'application/json'
+          }
+        });
+
+        return { ok: response.ok, status: response.status, text: await response.text() };
+      })()
+    `,
+    awaitPromise: true,
+    returnByValue: true,
+  })
+
+  const value = result.result.value
+  if (!value?.ok) return null
+
+  try {
+    return JSON.parse(value.text)
+  } catch {
+    return null
+  }
+}
+
 export async function readThread({
   screen_name,
   tweet_id,
   maxTweets = 100,
+  cursor,
+  page = false,
   ...options
 }: ReadThreadOptions): Promise<ThreadResult> {
   const xhrWaitTimeout = options.timeout?.xhrWait ?? DEFAULT_TIMEOUTS.xhrWait
-  const url = `https://x.com/${screen_name}/status/${tweet_id}`
+  const url = `https://x.com/${screen_name}/status/${tweet_id}?browser_agent=${Date.now()}`
 
   const { client, xhr$ } = await openPage({ ...(options || {}), url })
 
   try {
-    // 等待初始 TweetDetail 响应
-    let firstResp
-    try {
-      firstResp = await waitForMatch(xhr$, 'TweetDetail', xhrWaitTimeout)
-    } catch (err) {
-      if (err instanceof PageLoadedWithoutMatchError) {
-        throw new SessionExpiredError()
-      }
-      throw err
-    }
+    const firstResp = await waitForTweetDetail(xhr$, xhrWaitTimeout)
+    if (!firstResp) throw new SessionExpiredError()
 
     const firstBody = await firstResp.json()
-
-    // 提取主推文
     const mainTweet = extractMainTweet(firstBody, tweet_id)
-    if (!mainTweet) {
-      throw new Error(`Main tweet not found: ${tweet_id}`)
-    }
+    if (!mainTweet) throw new Error(`Main tweet not found: ${tweet_id}`)
 
-    // 共享状态
     const allReplies: any[] = []
     const seenIds = new Set<string>()
-    let stopLoading = false
+    let bottomCursor: string | null = null
 
-    // 处理单次 TweetDetail 响应，返回新增条数
     function processResponse(body: any): number {
-      const { tweets } = extractRepliesFromResponse(body)
+      const parsed = extractTweetsFromResponse(body, tweet_id)
+      bottomCursor = parsed.bottomCursor
+
       let added = 0
-      for (const tweet of tweets) {
-        if (tweet?.id && !seenIds.has(tweet.id)) {
+      for (const tweet of parsed.tweets) {
+        if (tweet.id && !seenIds.has(tweet.id)) {
           seenIds.add(tweet.id)
           allReplies.push(tweet)
           added++
@@ -140,108 +224,69 @@ export async function readThread({
 
     processResponse(firstBody)
 
-    // 初始响应已满足阈值，直接返回
-    if (allReplies.length >= maxTweets) {
+    const requestHeaders = firstResp.requestHeaders || {}
+
+    if (cursor) {
+      allReplies.length = 0
+      seenIds.clear()
+
+      const body = await fetchTweetDetailPage(client.Runtime, firstResp.url, cursor, requestHeaders)
+      if (!body) {
+        return {
+          mainTweet,
+          replies: [],
+          totalCount: 0,
+          hasMore: false,
+          nextCursor: null,
+        }
+      }
+
+      processResponse(body)
+      const capped = allReplies.slice(0, maxTweets)
       return {
         mainTweet,
-        replies: allReplies.slice(0, maxTweets),
+        replies: capped,
         totalCount: allReplies.length,
-        hasMore: true,
+        hasMore: !!bottomCursor,
+        nextCursor: bottomCursor,
       }
     }
 
-    const { Page, Runtime } = client
-    await Page.enable()
-    await Runtime.enable()
-
-    // Watcher loop: 持续订阅 TweetDetail 响应，积累数据直到达到阈值或无新数据
-    async function watcherLoop(): Promise<'threshold' | 'timeout' | 'no-new-data'> {
-      while (!stopLoading) {
-        let resp
-        try {
-          // 等待下一个 TweetDetail 响应（由 action loop 触发加载后到来）
-          resp = await waitForMatch(xhr$, 'TweetDetail', 5000)
-        } catch {
-          // 超时：action loop 未能触发新的请求，或等待时间超限
-          return 'timeout'
-        }
-
-        let body: any
-        try {
-          body = await resp.json()
-        } catch {
-          // 解析失败，跳过本次继续等待
-          continue
-        }
-
-        const added = processResponse(body)
-
-        if (allReplies.length >= maxTweets) {
-          return 'threshold'
-        }
-
-        if (added === 0) {
-          // 已无新回复，加载完毕
-          return 'no-new-data'
-        }
-      }
-      return 'threshold'
-    }
-
-    // Action loop: 轮询触发加载——优先点击 "Show replies"，否则滚动到底部触发无限滚动
-    async function actionLoop(): Promise<void> {
-      while (!stopLoading) {
-        // 给页面留出渲染时间后再触发下一次加载
-        await new Promise<void>(resolve => setTimeout(resolve, 800))
-        if (stopLoading) break
-
-        try {
-          await Runtime.evaluate({
-            expression: `
-              (function() {
-                // 优先尝试点击 "Show replies" 按钮
-                const spans = document.querySelectorAll('span');
-                for (const span of spans) {
-                  if (span.textContent === 'Show replies') {
-                    span.click();
-                    return 'show-replies';
-                  }
-                }
-                // 未找到按钮，滚动到底部触发无限加载
-                window.scrollTo(0, document.body.scrollHeight);
-                return 'scrolled';
-              })()
-            `,
-            returnByValue: true,
-          })
-        } catch {
-          // 客户端已关闭，退出循环
-          break
-        }
+    if (page) {
+      const capped = allReplies.slice(0, maxTweets)
+      return {
+        mainTweet,
+        replies: capped,
+        totalCount: allReplies.length,
+        hasMore: !!bottomCursor,
+        nextCursor: bottomCursor,
       }
     }
 
-    // 启动 action loop（后台持续触发加载）
-    const actionPromise = actionLoop().catch(() => { /* 忽略客户端关闭等预期错误 */ })
+    let noProgressRounds = 0
 
-    // 等待 watcher loop 得出结论
-    const watcherResult = await watcherLoop()
+    while (bottomCursor && allReplies.length < maxTweets && noProgressRounds < 3) {
+      const body = await fetchTweetDetailPage(client.Runtime, firstResp.url, bottomCursor, requestHeaders)
+      if (!body) break
 
-    // 通知 action loop 停止，等待其最后一次迭代完成（最多 500ms）
-    stopLoading = true
-    await Promise.race([
-      actionPromise,
-      new Promise<void>(resolve => setTimeout(resolve, 500)),
-    ])
+      const previousCursor = bottomCursor
+      const added = processResponse(body)
+
+      if (added === 0 || bottomCursor === previousCursor) {
+        noProgressRounds++
+      } else {
+        noProgressRounds = 0
+      }
+    }
 
     const capped = allReplies.slice(0, maxTweets)
     return {
       mainTweet,
       replies: capped,
       totalCount: allReplies.length,
-      hasMore: watcherResult === 'threshold' || allReplies.length > maxTweets,
+      hasMore: allReplies.length >= maxTweets && !!bottomCursor,
+      nextCursor: bottomCursor,
     }
-
   } finally {
     await client.close()
   }

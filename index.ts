@@ -174,10 +174,12 @@ app.get('/search', async (ctx) => {
 
 app.get('/thread/:screen_name/:tweet_id', async (ctx) => {
   const { screen_name, tweet_id } = ctx.req.param()
+  const cursor = ctx.req.query('cursor')
+  const page = ctx.req.query('page') === 'true' || !!cursor
   const maxTweets = parseInt(ctx.req.query('max') || '100', 10)
 
   try {
-    const result = await readThread({ screen_name, tweet_id, maxTweets })
+    const result = await readThread({ screen_name, tweet_id, maxTweets, cursor, page })
     return ctx.json(result)
   } catch (err) {
     if (err instanceof SessionExpiredError) {

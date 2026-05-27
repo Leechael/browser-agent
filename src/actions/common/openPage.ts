@@ -16,6 +16,7 @@ export interface XhrResponse<T=any> {
   url: string;
   status: number;
   headers: Record<string, string>;
+  requestHeaders?: Record<string, string>;
   body: () => Promise<unknown>;
   json: () => Promise<T>;
 }
@@ -43,7 +44,9 @@ export interface PendingRequest {
   responseReceived?: boolean;
   loadingFinished?: boolean;
   extraInfoReceived?: boolean;
+  emitted?: boolean;
   response?: any;
+  requestHeaders?: Record<string, string>;
   timestamp: number;
 }
 
@@ -101,6 +104,48 @@ async function setupNetworkMonitoring(
     }
   }
 
+  async function emitResponseIfReady(requestId: string) {
+    const pending = pendingRequests.get(requestId);
+    if (!pending || pending.emitted || !pending.responseReceived || !pending.loadingFinished) {
+      return
+    }
+
+    pending.emitted = true
+
+    try {
+      for (let i = 0; i < 3; i++) {
+        try {
+          await delay(50 * (i + 1));
+
+          const xhrResponse: XhrResponse = {
+            requestId,
+            url: pending.url,
+            status: pending.response!.status,
+            headers: pending.response!.headers,
+            requestHeaders: pending.requestHeaders,
+            body: async function () {
+              return (await Network.getResponseBody({ requestId })).body
+            },
+            json: async function () {
+              const raw = (await Network.getResponseBody({ requestId })).body
+              return JSON.parse(raw)
+            },
+          };
+
+          xhrSubject.next(xhrResponse);
+          break;
+        } catch {
+        }
+      }
+    } finally {
+      pendingRequests.delete(requestId);
+      if (pendingRequests.size === 0) {
+        signalSubject.next(loadingFinishedSymbol);
+        resetIdleTimer();
+      }
+    }
+  }
+
   await Network.enable();
 
   // Listen for page load event
@@ -116,6 +161,7 @@ async function setupNetworkMonitoring(
       resetIdleTimer();
       pendingRequests.set(requestId, {
         url: request.url,
+        requestHeaders: request.headers as Record<string, string>,
         timestamp: +(new Date),
       });
     }
@@ -128,6 +174,7 @@ async function setupNetworkMonitoring(
         pending.responseReceived = true;
         pending.response = response;
         pending.timestamp = timestamp;
+        void emitResponseIfReady(requestId);
       }
     }
   });
@@ -139,48 +186,14 @@ async function setupNetworkMonitoring(
     }
   });
 
-  Network.loadingFinished(async ({ requestId }) => {
+  Network.loadingFinished(({ requestId }) => {
     const pending = pendingRequests.get(requestId);
     if (!pending) {
       return
     }
 
     pending.loadingFinished = true;
-
-    if (pending.responseReceived && pending.extraInfoReceived) {
-      try {
-        for (let i = 0; i < 3; i++) {
-          try {
-            await delay(50 * (i + 1));
-
-            const xhrResponse: XhrResponse = {
-              requestId,
-              url: pending.url,
-              status: pending.response!.status,
-              headers: pending.response!.headers,
-              body: async function () {
-                return (await Network.getResponseBody({ requestId })).body
-              },
-              json: async function () {
-                const raw = (await Network.getResponseBody({ requestId })).body
-                return JSON.parse(raw)
-              },
-            };
-
-            xhrSubject.next(xhrResponse);
-            break;
-          } catch (err) {
-          }
-        }
-      } finally {
-        pendingRequests.delete(requestId);
-        if (pendingRequests.size === 0) {
-          signalSubject.next(loadingFinishedSymbol);
-          // Also reset idle timer when all requests finished
-          resetIdleTimer();
-        }
-      }
-    }
+    void emitResponseIfReady(requestId);
   });
 
   Network.loadingFailed(({ requestId, errorText }) => {
@@ -207,9 +220,9 @@ export async function openPage({ url, port = Number(process.env.CHROME_PORT) || 
   const timeouts = resolveTimeouts(timeout);
 
   try {
-    const targets = await CDP.List()
+    const targets = await CDP.List({ port })
     if (targets.length === 0) {
-      await CDP.New({ url: 'about:blank' })
+      await CDP.New({ port, url: 'about:blank' })
     }
     let client = await CDP({ port });
     try {
@@ -224,9 +237,9 @@ export async function openPage({ url, port = Number(process.env.CHROME_PORT) || 
       // If it's our timeout error, might need to retry
       const resp = await client.Target.getTargetInfo()
       await client.Target.closeTarget({ targetId: resp.targetInfo.targetId })
-      const targets = await CDP.List()
+      const targets = await CDP.List({ port })
       if (targets.length === 0) {
-        await CDP.New({ url: 'about:blank' })
+        await CDP.New({ port, url: 'about:blank' })
       }
       client = await CDP({ port })
       await client.Page.enable()
