@@ -23,6 +23,13 @@ interface ParsedTweets {
   bottomCursor: string | null
 }
 
+class CursorPageFetchError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CursorPageFetchError'
+  }
+}
+
 function safeExtractTweet(tweetResult: any): any | null {
   try {
     return tweetResult ? extractTweet(tweetResult) : null
@@ -142,16 +149,18 @@ async function fetchTweetDetailPage(
   templateUrl: string,
   cursor: string,
   requestHeaders: Record<string, string> = {}
-): Promise<any | null> {
+): Promise<any> {
   const pageUrl = buildCursorUrl(templateUrl, cursor)
   const authorization = requestHeaders.authorization || requestHeaders.Authorization
-  if (!authorization) return null
+  if (!authorization) {
+    throw new CursorPageFetchError('Missing authorization header for thread cursor pagination')
+  }
 
   const result = await Runtime.evaluate({
     expression: `
       (async function() {
         const ct0 = document.cookie.split('; ').find(item => item.startsWith('ct0='))?.slice(4);
-        if (!ct0) return { ok: false, status: 0, text: '' };
+        if (!ct0) return { ok: false, status: 0, text: '', error: 'Missing ct0 cookie' };
 
         const response = await fetch(${JSON.stringify(pageUrl)}, {
           credentials: 'include',
@@ -173,12 +182,15 @@ async function fetchTweetDetailPage(
   })
 
   const value = result.result.value
-  if (!value?.ok) return null
+  if (!value?.ok) {
+    const detail = value?.error || value?.text || 'unknown error'
+    throw new CursorPageFetchError(`Thread cursor fetch failed with status ${value?.status ?? 'unknown'}: ${detail}`)
+  }
 
   try {
     return JSON.parse(value.text)
-  } catch {
-    return null
+  } catch (err) {
+    throw new CursorPageFetchError(`Thread cursor fetch returned invalid JSON: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -231,16 +243,6 @@ export async function readThread({
       seenIds.clear()
 
       const body = await fetchTweetDetailPage(client.Runtime, firstResp.url, cursor, requestHeaders)
-      if (!body) {
-        return {
-          mainTweet,
-          replies: [],
-          totalCount: 0,
-          hasMore: false,
-          nextCursor: null,
-        }
-      }
-
       processResponse(body)
       const capped = allReplies.slice(0, maxTweets)
       return {
@@ -267,7 +269,6 @@ export async function readThread({
 
     while (bottomCursor && allReplies.length < maxTweets && noProgressRounds < 3) {
       const body = await fetchTweetDetailPage(client.Runtime, firstResp.url, bottomCursor, requestHeaders)
-      if (!body) break
 
       const previousCursor = bottomCursor
       const added = processResponse(body)
