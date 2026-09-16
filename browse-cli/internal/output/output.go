@@ -186,9 +186,44 @@ func (f *Formatter) printHumanMap(w io.Writer, m map[string]interface{}) error {
 		return nil
 	}
 
+	// If this looks like a user (People search result).
+	if username, ok := getString(m, "username"); ok && username != "" {
+		if _, hasID := m["user_id"]; hasID {
+			return f.printHumanUser(w, m, username)
+		}
+	}
+
 	// Generic map: key-value lines.
 	for k, val := range m {
 		fmt.Fprintf(w, "%s\t%s\n", k, fmt.Sprint(val))
+	}
+	return nil
+}
+
+func (f *Formatter) printHumanUser(w io.Writer, m map[string]interface{}, username string) error {
+	name := getStringDefault(m, "name", "")
+	if name != "" {
+		fmt.Fprintf(w, "%s (@%s)\n", name, username)
+	} else {
+		fmt.Fprintf(w, "@%s\n", username)
+	}
+	fmt.Fprintf(w, "https://x.com/%s\n", username)
+
+	if bio := getStringDefault(m, "bio", ""); bio != "" {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, bio)
+	}
+
+	parts := []string{}
+	if v, ok := getFloat(m, "followers_count"); ok {
+		parts = append(parts, fmt.Sprintf("%.0f followers", v))
+	}
+	if v, ok := getFloat(m, "following_count"); ok {
+		parts = append(parts, fmt.Sprintf("%.0f following", v))
+	}
+	if len(parts) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%s\n", joinParts(parts, " · "))
 	}
 	return nil
 }
