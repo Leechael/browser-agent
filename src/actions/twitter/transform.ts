@@ -245,20 +245,31 @@ function articleBlocksToMarkdown(blocks: any[]): string {
 }
 
 export function extractTweet(tweet: any) {
-  if (tweet.__typename === 'TimelineTweet') {
-    tweet = tweet.tweet_results.result
-  } else if (tweet.__typename === 'TweetWithVisibilityResults') {
-    tweet = tweet.tweet
+  // Unwrap nested result wrappers: TimelineTweet -> tweet_results.result may
+  // itself be a TweetWithVisibilityResults wrapping the actual Tweet.
+  while (tweet) {
+    if (tweet.__typename === 'TimelineTweet') {
+      tweet = tweet.tweet_results?.result
+    } else if (tweet.__typename === 'TweetWithVisibilityResults') {
+      tweet = tweet.tweet
+    } else {
+      break
+    }
   }
+  // TweetTombstone (deleted/withheld), TweetUnavailable, or any shape we
+  // cannot read — treated as non-extractable.
+  if (!tweet || tweet.__typename === 'TweetTombstone') return null
   // const tweet = tweetData.tweet_results ? tweetData.tweet_results.result : tweetData
   // NOTE: 2025-06-04: `legacy` means it will be removed any time.
-  const user = tweet.core.user_results.result
+  const user = tweet.core?.user_results?.result
   const legacy = tweet.legacy
+  if (!user || !legacy) return null
 
   const author = {
     user_id: user.rest_id,
-    username: user.core.screen_name,
-    name: user.core.name
+    // GraphQL users carry `core`; v1 users (notifications globalObjects) carry `legacy`.
+    username: user.core?.screen_name ?? user.legacy?.screen_name,
+    name: user.core?.name ?? user.legacy?.name
   }
   const is_retweeted = !!legacy.retweeted_status_result
   const is_quoted = !!tweet.quoted_status_result || !!(tweet?.legacy?.is_quote_status)
@@ -291,11 +302,11 @@ export function extractTweet(tweet: any) {
   }
 
   if (is_retweeted) {
-    ret.retweet_for = extractTweet(legacy.retweeted_status_result.result)
+    ret.retweet_for = extractTweet(legacy.retweeted_status_result?.result)
   }
 
   if (is_quoted && tweet?.quoted_status_result) {
-    ret.quote_for = extractTweet(tweet.quoted_status_result.result)
+    ret.quote_for = extractTweet(tweet.quoted_status_result?.result)
   }
 
   if (is_article) {
@@ -318,52 +329,155 @@ export function extractTweet(tweet: any) {
   return ret
 }
 
+export function extractUser(userResult: any) {
+  const user = userResult?.__typename === 'TimelineUser' ? userResult.user_results?.result : userResult
+  if (!user?.rest_id) return null
+  return {
+    user_id: user.rest_id,
+    username: user.core?.screen_name ?? user.legacy?.screen_name,
+    name: user.core?.name ?? user.legacy?.name,
+    bio: user.profile_bio?.description ?? user.legacy?.description ?? '',
+    followers_count: user.relationship_counts?.followers ?? user.legacy?.followers_count,
+    following_count: user.relationship_counts?.following ?? user.legacy?.friends_count,
+    is_blue_verified: !!user.is_blue_verified,
+    verified: user.verification?.verified ?? user.legacy?.verified ?? false,
+    avatar: user.avatar?.image_url ?? user.legacy?.profile_image_url_https,
+    location: user.location?.location ?? user.legacy?.location ?? '',
+    created_at: user.core?.created_at ?? user.legacy?.created_at,
+  }
+}
+
+function safeExtractTweet(input: any): any | null {
+  try {
+    return extractTweet(input)
+  } catch {
+    return null
+  }
+}
+
 export function extractTimeline(raw: any[]) {
   const tweets: any[] = []
   raw.forEach(instruction => {
     if (instruction.type === "TimelineAddEntries") {
-      let i = 0
       instruction.entries.forEach((entry: any) => {
-        console.log(`parsing index ${i++}`)
-        let tweetContent;
+        const content = entry.content
+        if (!content) return
         // Single tweets
-        if (entry.content && entry.content.entryType === "TimelineTimelineItem") {
+        if (content.entryType === "TimelineTimelineItem") {
           // skip the promototed tweets
-          if (entry?.content?.clientEventInfo?.component === 'following_promoted') {
+          if (content?.clientEventInfo?.component === 'following_promoted') {
             return
           }
-          tweetContent = entry.content.itemContent
-          const processedTweet = extractTweet(tweetContent)
-          tweets.push(processedTweet)
+          // Search timelines interleave non-tweet items (TimelinePrompt,
+          // TimelineUser, ...); only TimelineTweet entries are extractable.
+          if (content.itemContent?.__typename !== 'TimelineTweet') {
+            return
+          }
+          const processedTweet = safeExtractTweet(content.itemContent)
+          if (processedTweet) {
+            tweets.push(processedTweet)
+          }
         }
         // Threads (VerticalConversation)
         else if (
-          entry.content && entry.content.entryType === 'TimelineTimelineModule'
-          && entry.content?.metadata?.conversationMetadata
+          content.entryType === 'TimelineTimelineModule'
+          && content?.metadata?.conversationMetadata
         ) {
-          const mainTweet: any = extractTweet(entry.content.items[0].item.itemContent)
-          mainTweet.conversationAllTweetIds = entry.content.metadata.conversationMetadata.allTweetIds
-          mainTweet.conversations = entry.content.items.slice(1).map((i: any) => {
-            return extractTweet(i.item.itemContent)
-          })
+          const mainTweet: any = safeExtractTweet(content.items[0].item.itemContent)
+          if (!mainTweet) return
+          mainTweet.conversationAllTweetIds = content.metadata.conversationMetadata.allTweetIds
+          mainTweet.conversations = content.items.slice(1)
+            .map((i: any) => safeExtractTweet(i.item.itemContent))
+            .filter(Boolean)
           tweets.push(mainTweet)
         }
         // Grid / module items (media tab, etc.)
         else if (
-          entry.content && entry.content.entryType === 'TimelineTimelineModule'
-          && entry.content.items?.length
+          content.entryType === 'TimelineTimelineModule'
+          && content.items?.length
         ) {
-          for (const item of entry.content.items) {
+          for (const item of content.items) {
             const itemContent = item?.item?.itemContent
-            if (itemContent) {
-              tweets.push(extractTweet(itemContent))
+            if (itemContent?.__typename !== 'TimelineTweet') continue
+            const tweet = safeExtractTweet(itemContent)
+            if (tweet) {
+              tweets.push(tweet)
             }
           }
-        } else {
-          console.log(`unhandled entryType ${entry?.content?.entryType}`, entry)
         }
+        // TimelineTimelineCursor and other entry types are ignored.
       });
     }
   });
   return tweets
+}
+
+export interface SearchTimelineExtraction {
+  tweets: any[]
+  users: any[]
+  bottomCursor: string | null
+}
+
+/**
+ * Extract tweets, users and the bottom cursor from a SearchTimeline response
+ * body. Search timelines interleave non-tweet entries (relevance prompts,
+ * user cards, cursors); anything not extractable is skipped.
+ */
+export function extractSearchTimeline(body: any): SearchTimelineExtraction {
+  const instructions = body?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || []
+  const tweets: any[] = []
+  const users: any[] = []
+  let bottomCursor: string | null = null
+
+  const handleItemContent = (itemContent: any) => {
+    if (!itemContent) return
+    if (itemContent.__typename === 'TimelineTweet') {
+      const tweet = safeExtractTweet(itemContent)
+      if (tweet) tweets.push(tweet)
+    } else if (itemContent.__typename === 'TimelineUser') {
+      const user = extractUser(itemContent)
+      if (user) users.push(user)
+    }
+  }
+
+  for (const instruction of instructions) {
+    if (instruction.type !== 'TimelineAddEntries') continue
+    for (const entry of instruction.entries || []) {
+      const content = entry.content
+      if (!content) continue
+
+      if (content.entryType === 'TimelineTimelineCursor') {
+        if (content.cursorType === 'Bottom' && content.value) {
+          bottomCursor = content.value
+        }
+        continue
+      }
+
+      if (content.entryType === 'TimelineTimelineItem') {
+        if (content?.clientEventInfo?.component === 'following_promoted') continue
+        handleItemContent(content.itemContent)
+        continue
+      }
+
+      if (content.entryType === 'TimelineTimelineModule') {
+        if (content?.metadata?.conversationMetadata) {
+          const mainTweet: any = safeExtractTweet(content.items?.[0]?.item?.itemContent)
+          if (mainTweet) {
+            mainTweet.conversationAllTweetIds = content.metadata.conversationMetadata.allTweetIds
+            mainTweet.conversations = (content.items || []).slice(1)
+              .map((i: any) => safeExtractTweet(i.item?.itemContent))
+              .filter(Boolean)
+            tweets.push(mainTweet)
+          }
+        } else {
+          // Grid modules (Media tab) and user carousels.
+          for (const item of content.items || []) {
+            handleItemContent(item?.item?.itemContent)
+          }
+        }
+      }
+    }
+  }
+
+  return { tweets, users, bottomCursor }
 }

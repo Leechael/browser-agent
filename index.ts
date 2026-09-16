@@ -12,7 +12,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { openPage } from '@/actions/common/openPage'
 import { waitForElement } from '@/actions/common/waitForElement'
-import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search } from '@/actions/twitter'
+import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search, watchSearch, RateLimitError } from '@/actions/twitter'
 import { zValidator } from '@hono/zod-validator'
 import { runMacro, PlaybackRequest } from '@/macros'
 import { fetchPage } from '@/actions/web'
@@ -87,7 +87,7 @@ const timeoutException = () =>
 app.use('/*', async (c, next) => {
   const path = c.req.path
   // Skip timeout for stream routes
-  if (path === '/sse' || path === '/mcp' || path === '/messages') {
+  if (path === '/sse' || path === '/mcp' || path === '/messages' || path === '/search/watch') {
     return next()
   }
   return timeout(REQUEST_TIMEOUT_MS, timeoutException)(c, next)
@@ -156,20 +156,131 @@ app.get('/search', async (ctx) => {
     return n
   }
 
-  const tweets = await search({
-    query,
-    searchType: (ctx.req.query('searchType') as any) || 'top',
-    from: ctx.req.query('from'),
-    to: ctx.req.query('to'),
-    since: ctx.req.query('since'),
-    until: ctx.req.query('until'),
-    filter: ctx.req.query('filter') as any,
-    minRetweets: parseIntParam('minRetweets'),
-    minFaves: parseIntParam('minFaves'),
-    minReplies: parseIntParam('minReplies'),
-    lang: ctx.req.query('lang'),
+  try {
+    const result = await search({
+      query,
+      searchType: (ctx.req.query('searchType') as any) || 'top',
+      from: ctx.req.query('from'),
+      to: ctx.req.query('to'),
+      since: ctx.req.query('since'),
+      until: ctx.req.query('until'),
+      filter: ctx.req.query('filter') as any,
+      minRetweets: parseIntParam('minRetweets'),
+      minFaves: parseIntParam('minFaves'),
+      minReplies: parseIntParam('minReplies'),
+      lang: ctx.req.query('lang'),
+      maxTweets: parseIntParam('max'),
+    })
+    return ctx.json(result)
+  } catch (err) {
+    if (err instanceof SessionExpiredError) {
+      return ctx.json({ error: 'session_expired', message: err.message }, 403)
+    }
+    if (err instanceof RateLimitError) {
+      return ctx.json({ error: 'rate_limited', message: err.message, resetAt: err.resetAt }, 429)
+    }
+    throw err
+  }
+})
+
+app.get('/search/watch', async (ctx) => {
+  const query = ctx.req.query('q')
+  if (!query) {
+    return ctx.json({ error: 'Missing required query parameter: q' }, 400)
+  }
+
+  function parseIntParam(name: string): number | undefined {
+    const val = ctx.req.query(name)
+    if (!val) return undefined
+    const n = Number(val)
+    if (!Number.isFinite(n)) return undefined
+    return n
+  }
+
+  const intervalSec = parseIntParam('interval')
+  const maxMinutes = parseIntParam('maxMinutes')
+
+  return streamSSE(ctx, async (stream) => {
+    const abort = new AbortController()
+    stream.onAbort(() => abort.abort())
+
+    // Bound writes: if the client stops reading, pending writeSSE promises
+    // would otherwise accumulate forever. A timed-out write cancels the
+    // underlying stream (releasing pending writes) and is terminal for the
+    // watch, in every code path that writes.
+    class SseWriteTimeoutError extends Error {
+      constructor() {
+        super('sse write timeout')
+        this.name = 'SseWriteTimeoutError'
+      }
+    }
+    const writeEvent = async (event: string, data: string) => {
+      try {
+        await Promise.race([
+          stream.writeSSE({ event, data }),
+          new Promise((_, reject) => setTimeout(() => reject(new SseWriteTimeoutError()), 10000)),
+        ])
+      } catch (err) {
+        if (err instanceof SseWriteTimeoutError) {
+          // Client is gone — cancel the underlying stream so pending writes
+          // are released (handler return alone queues writer.close() behind
+          // them and the stream never actually closes).
+          stream.abort()
+        }
+        throw err
+      }
+    }
+
+    let heartbeatInFlight = false
+    const heartbeat = setInterval(() => {
+      if (heartbeatInFlight) return
+      heartbeatInFlight = true
+      writeEvent('ping', '{}')
+        .catch(() => {})
+        .finally(() => { heartbeatInFlight = false })
+    }, 15000)
+
+    try {
+      await watchSearch({
+        query,
+        searchType: (ctx.req.query('searchType') as any) || 'latest',
+        from: ctx.req.query('from'),
+        to: ctx.req.query('to'),
+        since: ctx.req.query('since'),
+        until: ctx.req.query('until'),
+        filter: ctx.req.query('filter') as any,
+        minRetweets: parseIntParam('minRetweets'),
+        minFaves: parseIntParam('minFaves'),
+        minReplies: parseIntParam('minReplies'),
+        lang: ctx.req.query('lang'),
+        intervalSec,
+        maxLifetimeMs: maxMinutes ? maxMinutes * 60 * 1000 : undefined,
+        signal: abort.signal,
+        onResults: async (results, resultType) => {
+          await writeEvent('results', JSON.stringify({ results, resultType, count: results.length }))
+        },
+        onEvent: async (event) => {
+          await writeEvent(event.type, JSON.stringify(event))
+        },
+      })
+      await writeEvent('end', JSON.stringify({ reason: abort.signal.aborted ? 'aborted' : 'max_lifetime' }))
+    } catch (err) {
+      // Stop the watch loop promptly; it may still be sleeping between polls.
+      abort.abort()
+      if (err instanceof SseWriteTimeoutError) {
+        // Client is gone; the underlying stream was already aborted inside
+        // writeEvent, and no error event is written into the void.
+      } else if (err instanceof SessionExpiredError) {
+        await writeEvent('error', JSON.stringify({ error: 'session_expired', message: err.message })).catch(() => {})
+      } else if (err instanceof RateLimitError) {
+        await writeEvent('error', JSON.stringify({ error: 'rate_limited', message: err.message, resetAt: err.resetAt })).catch(() => {})
+      } else {
+        await writeEvent('error', JSON.stringify({ error: 'watch_failed', message: err instanceof Error ? err.message : String(err) })).catch(() => {})
+      }
+    } finally {
+      clearInterval(heartbeat)
+    }
   })
-  return ctx.json(tweets)
 })
 
 app.get('/thread/:screen_name/:tweet_id', async (ctx) => {

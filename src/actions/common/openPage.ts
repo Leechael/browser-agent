@@ -48,6 +48,7 @@ export interface PendingRequest {
   response?: any;
   requestHeaders?: Record<string, string>;
   timestamp: number;
+  lastActivity: number;
 }
 
 function getDomainFromUrl(url: string): string {
@@ -60,6 +61,12 @@ function getDomainFromUrl(url: string): string {
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Pending requests with no activity beyond this are evicted by the idle
+ * sweep, so long-lived streams cannot block idle/finished signals forever.
+ */
+const STALE_REQUEST_MS = 60000;
 
 interface NetworkMonitoringOptions {
   idleTimeout: number;
@@ -96,6 +103,15 @@ async function setupNetworkMonitoring(
     }
     if (pageLoaded && !idleEmitted) {
       idleTimer = setTimeout(() => {
+        // Evict stale pending entries first: long-lived fetch() streams
+        // (e.g. X live_pipeline SSE) never fire loadingFinished and would
+        // otherwise block the idle/finished signals forever.
+        const now = Date.now();
+        for (const [id, pending] of pendingRequests) {
+          if (now - pending.lastActivity > STALE_REQUEST_MS) {
+            pendingRequests.delete(id);
+          }
+        }
         // Page loaded + no new requests for idleTimeout ms → emit idle signal
         if (pendingRequests.size === 0) {
           emitIdleSignal();
@@ -156,24 +172,28 @@ async function setupNetworkMonitoring(
   });
 
   Network.requestWillBeSent(({ requestId, request, type }) => {
-    if (type === 'XHR') {
+    // XHR covers XMLHttpRequest; Fetch covers fetch() API calls (some X
+    // endpoints, e.g. live refresh, use fetch and would be missed otherwise).
+    if (type === 'XHR' || type === 'Fetch') {
       // Reset idle timer when new XHR request starts
       resetIdleTimer();
       pendingRequests.set(requestId, {
         url: request.url,
         requestHeaders: request.headers as Record<string, string>,
         timestamp: +(new Date),
+        lastActivity: Date.now(),
       });
     }
   });
 
   Network.responseReceived(({ requestId, response, type, timestamp }) => {
-    if (type === 'XHR') {
+    if (type === 'XHR' || type === 'Fetch') {
       const pending = pendingRequests.get(requestId);
       if (pending) {
         pending.responseReceived = true;
         pending.response = response;
         pending.timestamp = timestamp;
+        pending.lastActivity = Date.now();
         void emitResponseIfReady(requestId);
       }
     }

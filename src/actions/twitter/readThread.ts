@@ -208,7 +208,20 @@ export async function readThread({
   const { client, xhr$ } = await openPage({ ...(options || {}), url })
 
   try {
-    const firstResp = await waitForTweetDetail(xhr$, xhrWaitTimeout)
+    // The TweetDetail request can lag behind page load. On the first miss,
+    // start the retry listener BEFORE nudging the page, so a response
+    // triggered during the URL check / scroll cannot be dropped by the hot
+    // XHR stream and mistaken for an expired session.
+    let firstResp = await waitForTweetDetail(xhr$, xhrWaitTimeout)
+    if (!firstResp) {
+      const href = (await client.Runtime.evaluate({ expression: 'location.href', returnByValue: true }))?.result?.value || ''
+      if (href.includes('/login') || href.includes('/i/flow/')) {
+        throw new SessionExpiredError()
+      }
+      const retryPromise = waitForTweetDetail(xhr$, xhrWaitTimeout)
+      await client.Runtime.evaluate({ expression: 'window.scrollTo(0, document.body.scrollHeight)' })
+      firstResp = await retryPromise
+    }
     if (!firstResp) throw new SessionExpiredError()
 
     const firstBody = await firstResp.json()
