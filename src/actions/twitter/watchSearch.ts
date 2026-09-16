@@ -13,9 +13,11 @@ export interface WatchSearchOptions extends SearchOptions {
   maxLifetimeMs?: number
   /** Abort the watch (e.g. SSE client disconnect). */
   signal?: AbortSignal
-  /** Called with each batch of newly seen results (already deduplicated). */
+  /** Called with each batch of newly seen results (already deduplicated).
+   *  A rejected callback is fatal: the consumer is gone, so the watch stops. */
   onResults: (results: any[], resultType: 'tweets' | 'users') => void | Promise<void>
-  /** Called for non-fatal events (rate limit backoff, transient errors, poll ticks). */
+  /** Called for non-result events (rate limit backoff, transient errors, poll ticks).
+   *  A rejected callback is fatal for the same reason as onResults. */
   onEvent?: (event: WatchEvent) => void | Promise<void>
 }
 
@@ -25,7 +27,19 @@ const DEFAULT_MAX_LIFETIME_MS = 60 * 60 * 1000
 const MAX_CONSECUTIVE_FAILURES = 3
 const SEEN_IDS_CAP = 5000
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+class WatchAbortedError extends Error {
+  constructor() {
+    super('watch aborted')
+    this.name = 'WatchAbortedError'
+  }
+}
+
+class WatchDeadlineError extends Error {
+  constructor() {
+    super('watch deadline exceeded')
+    this.name = 'WatchDeadlineError'
+  }
+}
 
 /** Sleep that resolves early when the abort signal fires. */
 function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -38,6 +52,24 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
       resolve()
     }
     signal?.addEventListener('abort', done, { once: true })
+  })
+}
+
+/** Rejects when the abort signal fires or the deadline passes, whichever first. */
+function untilAbortedOrDeadline(signal: AbortSignal | undefined, deadline: number): Promise<never> {
+  return new Promise((_, reject) => {
+    const finish = (err: Error) => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      reject(err)
+    }
+    const onAbort = () => finish(new WatchAbortedError())
+    const timer = setTimeout(() => finish(new WatchDeadlineError()), Math.max(0, deadline - Date.now()))
+    if (signal?.aborted) {
+      finish(new WatchAbortedError())
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -54,6 +86,11 @@ function resultKey(item: any): string | null {
  * freshly minted by the page, and the in-page "new posts" pill is fed by the
  * live_pipeline push channel rather than a documentable API. So watching is
  * implemented as periodic re-search with deduplication.
+ *
+ * Lifecycle: abort and deadline interrupt both the inter-poll sleep and an
+ * in-flight poll. A poll orphaned by an interruption keeps running in the
+ * background and closes its own browser page when it settles (bounded by the
+ * page timeouts), so no resource leaks past that point.
  */
 export async function watchSearch(options: WatchSearchOptions): Promise<void> {
   const {
@@ -70,54 +107,27 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
   const seen = new Set<string>()
   let failures = 0
 
-  const emit = async (event: WatchEvent) => {
-    try {
-      await onEvent?.(event)
-    } catch {
-      // Consumer callbacks must not kill the watch loop.
-    }
-  }
-
   while (!signal?.aborted && Date.now() < deadline) {
+    let results: any[]
+    let resultType: 'tweets' | 'users'
+
+    const poll = search({ ...searchOptions, maxTweets: 20 })
+    // The poll may be orphaned by an abort/deadline racing ahead; never let
+    // its late rejection crash the process.
+    poll.catch(() => {})
     try {
-      const { results, resultType } = await search({ ...searchOptions, maxTweets: 20 })
-
-      // Honor abort and deadline even when the poll outlived them.
-      if (signal?.aborted || Date.now() >= deadline) break
-
-      const fresh: any[] = []
-      for (const item of results) {
-        const key = resultKey(item)
-        if (!key || seen.has(key)) continue
-        seen.add(key)
-        fresh.push(item)
-      }
-      // Bound memory on long watches.
-      if (seen.size > SEEN_IDS_CAP) {
-        const drop = seen.size - SEEN_IDS_CAP
-        let i = 0
-        for (const key of seen) {
-          seen.delete(key)
-          if (++i >= drop) break
-        }
-      }
-
-      failures = 0
-      if (fresh.length > 0) {
-        await onResults(fresh, resultType)
-      }
-      await emit({ type: 'poll', newCount: fresh.length, seenCount: seen.size })
-
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) break
-      await abortableSleep(Math.min(interval, remaining), signal)
+      const outcome = await Promise.race([poll, untilAbortedOrDeadline(signal, deadline)])
+      results = outcome.results
+      resultType = outcome.resultType
     } catch (err) {
+      if (err instanceof WatchAbortedError || err instanceof WatchDeadlineError) break
       if (err instanceof RateLimitError) {
         failures = 0
         const waitMs = err.resetAt
           ? Math.max(interval, err.resetAt * 1000 - Date.now() + 1000)
           : 15 * 60 * 1000
-        await emit({ type: 'rate_limited', resetAt: err.resetAt, waitMs })
+        // Consumer callback errors are fatal and propagate out of the watch.
+        await onEvent?.({ type: 'rate_limited', resetAt: err.resetAt, waitMs })
         await abortableSleep(Math.min(waitMs, Math.max(0, deadline - Date.now())), signal)
         continue
       }
@@ -125,7 +135,7 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
         throw err
       }
       failures++
-      await emit({
+      await onEvent?.({
         type: 'error',
         message: err instanceof Error ? err.message : String(err),
         consecutiveFailures: failures,
@@ -134,6 +144,37 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
         throw err
       }
       await abortableSleep(Math.min(interval * 2, Math.max(0, deadline - Date.now())), signal)
+      continue
     }
+
+    // Honor abort and deadline even when the poll outlived them.
+    if (signal?.aborted || Date.now() >= deadline) break
+
+    const fresh: any[] = []
+    for (const item of results) {
+      const key = resultKey(item)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      fresh.push(item)
+    }
+    // Bound memory on long watches.
+    if (seen.size > SEEN_IDS_CAP) {
+      const drop = seen.size - SEEN_IDS_CAP
+      let i = 0
+      for (const key of seen) {
+        seen.delete(key)
+        if (++i >= drop) break
+      }
+    }
+
+    failures = 0
+    if (fresh.length > 0) {
+      await onResults(fresh, resultType)
+    }
+    await onEvent?.({ type: 'poll', newCount: fresh.length, seenCount: seen.size })
+
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
+    await abortableSleep(Math.min(interval, remaining), signal)
   }
 }

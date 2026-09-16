@@ -205,11 +205,18 @@ app.get('/search/watch', async (ctx) => {
     stream.onAbort(() => abort.abort())
 
     // Bound writes: if the client stops reading, pending writeSSE promises
-    // would otherwise accumulate heartbeats forever and stall the watch.
+    // would otherwise accumulate forever. A timed-out write is terminal:
+    // it aborts the watch and closes the stream instead of polling on.
+    class SseWriteTimeoutError extends Error {
+      constructor() {
+        super('sse write timeout')
+        this.name = 'SseWriteTimeoutError'
+      }
+    }
     const writeEvent = async (event: string, data: string) => {
       await Promise.race([
         stream.writeSSE({ event, data }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('sse write timeout')), 10000)),
+        new Promise((_, reject) => setTimeout(() => reject(new SseWriteTimeoutError()), 10000)),
       ])
     }
 
@@ -247,7 +254,11 @@ app.get('/search/watch', async (ctx) => {
       })
       await writeEvent('end', JSON.stringify({ reason: abort.signal.aborted ? 'aborted' : 'max_lifetime' }))
     } catch (err) {
-      if (err instanceof SessionExpiredError) {
+      // Stop the watch loop promptly; it may still be sleeping between polls.
+      abort.abort()
+      if (err instanceof SseWriteTimeoutError) {
+        // Client is gone — no point writing an error event into the void.
+      } else if (err instanceof SessionExpiredError) {
         await writeEvent('error', JSON.stringify({ error: 'session_expired', message: err.message })).catch(() => {})
       } else if (err instanceof RateLimitError) {
         await writeEvent('error', JSON.stringify({ error: 'rate_limited', message: err.message, resetAt: err.resetAt })).catch(() => {})
