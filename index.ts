@@ -205,8 +205,9 @@ app.get('/search/watch', async (ctx) => {
     stream.onAbort(() => abort.abort())
 
     // Bound writes: if the client stops reading, pending writeSSE promises
-    // would otherwise accumulate forever. A timed-out write is terminal:
-    // it aborts the watch and closes the stream instead of polling on.
+    // would otherwise accumulate forever. A timed-out write cancels the
+    // underlying stream (releasing pending writes) and is terminal for the
+    // watch, in every code path that writes.
     class SseWriteTimeoutError extends Error {
       constructor() {
         super('sse write timeout')
@@ -214,17 +215,27 @@ app.get('/search/watch', async (ctx) => {
       }
     }
     const writeEvent = async (event: string, data: string) => {
-      await Promise.race([
-        stream.writeSSE({ event, data }),
-        new Promise((_, reject) => setTimeout(() => reject(new SseWriteTimeoutError()), 10000)),
-      ])
+      try {
+        await Promise.race([
+          stream.writeSSE({ event, data }),
+          new Promise((_, reject) => setTimeout(() => reject(new SseWriteTimeoutError()), 10000)),
+        ])
+      } catch (err) {
+        if (err instanceof SseWriteTimeoutError) {
+          // Client is gone — cancel the underlying stream so pending writes
+          // are released (handler return alone queues writer.close() behind
+          // them and the stream never actually closes).
+          stream.abort()
+        }
+        throw err
+      }
     }
 
     let heartbeatInFlight = false
     const heartbeat = setInterval(() => {
       if (heartbeatInFlight) return
       heartbeatInFlight = true
-      stream.writeSSE({ event: 'ping', data: '{}' })
+      writeEvent('ping', '{}')
         .catch(() => {})
         .finally(() => { heartbeatInFlight = false })
     }, 15000)
@@ -257,9 +268,8 @@ app.get('/search/watch', async (ctx) => {
       // Stop the watch loop promptly; it may still be sleeping between polls.
       abort.abort()
       if (err instanceof SseWriteTimeoutError) {
-        // Client is gone — cancel the underlying stream so pending writes are
-        // released (handler return alone queues writer.close() behind them).
-        stream.abort()
+        // Client is gone; the underlying stream was already aborted inside
+        // writeEvent, and no error event is written into the void.
       } else if (err instanceof SessionExpiredError) {
         await writeEvent('error', JSON.stringify({ error: 'session_expired', message: err.message })).catch(() => {})
       } else if (err instanceof RateLimitError) {
