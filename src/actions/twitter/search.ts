@@ -283,7 +283,12 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
 
     processBody(firstBody)
 
-    const count = () => allUsers.length > 0 ? allUsers.length : allTweets.length
+    // Result selection is driven by the requested tab, not by what happens
+    // to be in the response: Top results can contain a "People" carousel
+    // (TimelineUser cards) alongside tweets, and an empty People search must
+    // still report resultType=users.
+    const isPeopleSearch = searchType === 'people'
+    const count = () => isPeopleSearch ? allUsers.length : allTweets.length
 
     let idleRounds = 0
     while (bottomCursor && count() < maxTweets && idleRounds < 2) {
@@ -314,8 +319,8 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
       }
     }
 
-    const resultType: SearchResult['resultType'] = allUsers.length > 0 ? 'users' : 'tweets'
-    const results = (resultType === 'users' ? allUsers : allTweets).slice(0, maxTweets)
+    const resultType: SearchResult['resultType'] = isPeopleSearch ? 'users' : 'tweets'
+    const results = (isPeopleSearch ? allUsers : allTweets).slice(0, maxTweets)
     console.log(`[Search] Found ${results.length} ${resultType}`)
     return {
       results,
