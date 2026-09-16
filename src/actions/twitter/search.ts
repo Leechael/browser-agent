@@ -236,11 +236,15 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
     let resp: XhrResponse | null = null
     let lastWaitErr: unknown = null
     for (let attempt = 0; attempt < 2 && !resp; attempt++) {
+      // Check the redirect BEFORE creating the waiter: throwing here with an
+      // active waitPromise would leak its subscription and its later
+      // rejection. The waiter is created immediately before the nudge so no
+      // triggered response can fall into a gap.
+      if (attempt > 0 && await isLoginRedirect(client.Runtime)) {
+        throw new SessionExpiredError()
+      }
       const waitPromise = waitForMatch(xhr$, 'SearchTimeline', xhrWaitTimeout)
       if (attempt > 0) {
-        if (await isLoginRedirect(client.Runtime)) {
-          throw new SessionExpiredError()
-        }
         await scrollToBottom(client.Runtime)
       }
       try {
