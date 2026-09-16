@@ -12,7 +12,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { openPage } from '@/actions/common/openPage'
 import { waitForElement } from '@/actions/common/waitForElement'
-import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search, RateLimitError } from '@/actions/twitter'
+import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search, watchSearch, RateLimitError } from '@/actions/twitter'
 import { zValidator } from '@hono/zod-validator'
 import { runMacro, PlaybackRequest } from '@/macros'
 import { fetchPage } from '@/actions/web'
@@ -87,7 +87,7 @@ const timeoutException = () =>
 app.use('/*', async (c, next) => {
   const path = c.req.path
   // Skip timeout for stream routes
-  if (path === '/sse' || path === '/mcp' || path === '/messages') {
+  if (path === '/sse' || path === '/mcp' || path === '/messages' || path === '/search/watch') {
     return next()
   }
   return timeout(REQUEST_TIMEOUT_MS, timeoutException)(c, next)
@@ -181,6 +181,69 @@ app.get('/search', async (ctx) => {
     }
     throw err
   }
+})
+
+app.get('/search/watch', async (ctx) => {
+  const query = ctx.req.query('q')
+  if (!query) {
+    return ctx.json({ error: 'Missing required query parameter: q' }, 400)
+  }
+
+  function parseIntParam(name: string): number | undefined {
+    const val = ctx.req.query(name)
+    if (!val) return undefined
+    const n = Number(val)
+    if (!Number.isFinite(n)) return undefined
+    return n
+  }
+
+  const intervalSec = parseIntParam('interval')
+  const maxMinutes = parseIntParam('maxMinutes')
+
+  return streamSSE(ctx, async (stream) => {
+    const abort = new AbortController()
+    stream.onAbort(() => abort.abort())
+
+    const heartbeat = setInterval(() => {
+      stream.writeSSE({ event: 'ping', data: '{}' }).catch(() => {})
+    }, 15000)
+
+    try {
+      await watchSearch({
+        query,
+        searchType: (ctx.req.query('searchType') as any) || 'latest',
+        from: ctx.req.query('from'),
+        to: ctx.req.query('to'),
+        since: ctx.req.query('since'),
+        until: ctx.req.query('until'),
+        filter: ctx.req.query('filter') as any,
+        minRetweets: parseIntParam('minRetweets'),
+        minFaves: parseIntParam('minFaves'),
+        minReplies: parseIntParam('minReplies'),
+        lang: ctx.req.query('lang'),
+        intervalSec,
+        maxLifetimeMs: maxMinutes ? maxMinutes * 60 * 1000 : undefined,
+        signal: abort.signal,
+        onResults: async (results, resultType) => {
+          await stream.writeSSE({ event: 'results', data: JSON.stringify({ results, resultType, count: results.length }) })
+        },
+        onEvent: async (event) => {
+          await stream.writeSSE({ event: event.type, data: JSON.stringify(event) })
+        },
+      })
+      await stream.writeSSE({ event: 'end', data: JSON.stringify({ reason: abort.signal.aborted ? 'aborted' : 'max_lifetime' }) })
+    } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        await stream.writeSSE({ event: 'error', data: JSON.stringify({ error: 'session_expired', message: err.message }) })
+      } else if (err instanceof RateLimitError) {
+        await stream.writeSSE({ event: 'error', data: JSON.stringify({ error: 'rate_limited', message: err.message, resetAt: err.resetAt }) })
+      } else {
+        await stream.writeSSE({ event: 'error', data: JSON.stringify({ error: 'watch_failed', message: err instanceof Error ? err.message : String(err) }) })
+      }
+    } finally {
+      clearInterval(heartbeat)
+    }
+  })
 })
 
 app.get('/thread/:screen_name/:tweet_id', async (ctx) => {
