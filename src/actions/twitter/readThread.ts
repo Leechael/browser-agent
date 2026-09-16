@@ -208,7 +208,19 @@ export async function readThread({
   const { client, xhr$ } = await openPage({ ...(options || {}), url })
 
   try {
-    const firstResp = await waitForTweetDetail(xhr$, xhrWaitTimeout)
+    // The TweetDetail request can lag behind page load; nudge and retry once
+    // before concluding the session is expired.
+    let firstResp: XhrResponse | null = null
+    for (let attempt = 0; attempt < 2 && !firstResp; attempt++) {
+      firstResp = await waitForTweetDetail(xhr$, xhrWaitTimeout)
+      if (!firstResp) {
+        const href = (await client.Runtime.evaluate({ expression: 'location.href', returnByValue: true }))?.result?.value || ''
+        if (href.includes('/login') || href.includes('/i/flow/')) {
+          throw new SessionExpiredError()
+        }
+        await client.Runtime.evaluate({ expression: 'window.scrollTo(0, document.body.scrollHeight)' })
+      }
+    }
     if (!firstResp) throw new SessionExpiredError()
 
     const firstBody = await firstResp.json()
