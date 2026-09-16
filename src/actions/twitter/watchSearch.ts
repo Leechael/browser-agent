@@ -25,7 +25,6 @@ const DEFAULT_INTERVAL_SEC = 60
 const MIN_INTERVAL_SEC = 30
 const DEFAULT_MAX_LIFETIME_MS = 60 * 60 * 1000
 const MAX_CONSECUTIVE_FAILURES = 3
-const SEEN_IDS_CAP = 5000
 
 class WatchAbortedError extends Error {
   constructor() {
@@ -118,7 +117,7 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
     let results: any[]
     let resultType: 'tweets' | 'users'
 
-    const poll = search({ ...searchOptions, maxTweets: 20 })
+    const poll = search({ maxTweets: 20, ...searchOptions })
     // The poll may be orphaned by an abort/deadline racing ahead; never let
     // its late rejection crash the process.
     poll.catch(() => {})
@@ -143,14 +142,16 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
         throw err
       }
       failures++
+      if (failures >= MAX_CONSECUTIVE_FAILURES) {
+        // Terminal failure is signaled solely by the throw (the SSE layer
+        // writes the final error event); do not also emit one here.
+        throw err
+      }
       await onEvent?.({
         type: 'error',
         message: err instanceof Error ? err.message : String(err),
         consecutiveFailures: failures,
       })
-      if (failures >= MAX_CONSECUTIVE_FAILURES) {
-        throw err
-      }
       await abortableSleep(Math.min(interval * 2, Math.max(0, deadline - Date.now())), signal)
       continue
     } finally {
@@ -168,15 +169,9 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
       seen.add(key)
       fresh.push(item)
     }
-    // Bound memory on long watches.
-    if (seen.size > SEEN_IDS_CAP) {
-      const drop = seen.size - SEEN_IDS_CAP
-      let i = 0
-      for (const key of seen) {
-        seen.delete(key)
-        if (++i >= drop) break
-      }
-    }
+    // IDs are retained for the whole watch lifetime: evicting them would
+    // re-emit results that re-enter X's result window. At ~1 poll/min and
+    // ~20 ids/poll the set stays small for any sane maxLifetimeMs.
 
     failures = 0
     if (fresh.length > 0) {

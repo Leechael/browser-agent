@@ -27,7 +27,14 @@ func newSearchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return f.Print(cmd.OutOrStdout(), resp)
+			// Human/plain output renders the tweet list; --json/--jq get the
+			// full envelope (resultType, totalCount, hasMore).
+			jsonOut, _ := cmd.Flags().GetBool("json")
+			jqExpr, _ := cmd.Flags().GetString("jq")
+			if jsonOut || jqExpr != "" {
+				return f.Print(cmd.OutOrStdout(), resp)
+			}
+			return f.Print(cmd.OutOrStdout(), resp.Results)
 		},
 	}
 
