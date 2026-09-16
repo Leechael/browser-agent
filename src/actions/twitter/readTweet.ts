@@ -58,6 +58,7 @@ export async function readTweet({ screen_name, tweet_id, ...options }: ReadTweet
     }
   } catch (err) {
     console.log('err', err)
+    throw err
   } finally {
     await client.close()
   }

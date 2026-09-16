@@ -29,9 +29,14 @@ export async function readUserTimeline({ screen_name, tab = 'tweets', ...options
   const xhrWaitTimeout = options.timeout?.xhrWait ?? DEFAULT_TIMEOUTS.xhrWait
   const { client, xhr$ } = await openPage({ ...options, url })
   try {
-    const resp = await waitForMatch(xhr$, config.xhrPattern, xhrWaitTimeout).catch((err) => {
+    const resp = await waitForMatch(xhr$, config.xhrPattern, xhrWaitTimeout).catch(async (err) => {
       if (err instanceof PageLoadedWithoutMatchError) {
-        throw new SessionExpiredError()
+        // Only a real login redirect means the session expired; anything
+        // else (slow tab, renamed endpoint, rate limit) is rethrown as-is.
+        const href = (await client.Runtime.evaluate({ expression: 'location.href', returnByValue: true }))?.result?.value || ''
+        if (href.includes('/login') || href.includes('/i/flow/')) {
+          throw new SessionExpiredError()
+        }
       }
       throw err
     })
