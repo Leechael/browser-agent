@@ -206,7 +206,9 @@ async function isLoginRedirect(Runtime: any): Promise<boolean> {
  * unless the x-client-transaction-id is freshly minted by the page.
  */
 export async function search(options: SearchOptions): Promise<SearchResult> {
-  const { query, searchType, maxTweets = 20, ...pageOptions } = options
+  const { query, searchType, maxTweets: rawMaxTweets = 20, ...pageOptions } = options
+  // Clamp invalid values: negative numbers would make slice(0, n) misbehave.
+  const maxTweets = Number.isFinite(rawMaxTweets) ? Math.max(1, Math.floor(rawMaxTweets)) : 20
 
   // Build the full query
   const fullQuery = buildSearchQuery(options)
@@ -228,27 +230,33 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
 
   try {
     // The first SearchTimeline request can lag behind page idle on slower
-    // tabs (e.g. Media); retry once after a nudge before giving up.
+    // tabs (e.g. Media). Subscribe BEFORE nudging the page, otherwise a
+    // response triggered by the nudge can fall into the gap between waits
+    // (and the one-shot idle signal never fires again).
     let resp: XhrResponse | null = null
+    let lastWaitErr: unknown = null
     for (let attempt = 0; attempt < 2 && !resp; attempt++) {
-      try {
-        resp = await waitForMatch(xhr$, 'SearchTimeline', xhrWaitTimeout)
-      } catch (err) {
-        if (err instanceof PageLoadedWithoutMatchError) {
-          if (await isLoginRedirect(client.Runtime)) {
-            throw new SessionExpiredError()
-          }
-          await scrollToBottom(client.Runtime)
-          continue
+      const waitPromise = waitForMatch(xhr$, 'SearchTimeline', xhrWaitTimeout)
+      if (attempt > 0) {
+        if (await isLoginRedirect(client.Runtime)) {
+          throw new SessionExpiredError()
         }
-        if (err instanceof XhrWaitTimeoutError) {
-          await scrollToBottom(client.Runtime)
+        await scrollToBottom(client.Runtime)
+      }
+      try {
+        resp = await waitPromise
+      } catch (err) {
+        lastWaitErr = err
+        if (err instanceof PageLoadedWithoutMatchError || err instanceof XhrWaitTimeoutError) {
           continue
         }
         throw err
       }
     }
     if (!resp) {
+      if (lastWaitErr instanceof PageLoadedWithoutMatchError && await isLoginRedirect(client.Runtime)) {
+        throw new SessionExpiredError()
+      }
       throw new SearchPageFetchError('SearchTimeline did not load')
     }
 
@@ -266,17 +274,18 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
     const seenIds = new Set<string>()
     let bottomCursor: string | null = null
 
-    function processBody(body: any): number {
+    function processBody(body: any): { addedTweets: number, addedUsers: number } {
       const parsed = extractSearchTimeline(body)
       bottomCursor = parsed.bottomCursor
 
-      let added = 0
+      let addedTweets = 0
+      let addedUsers = 0
       for (const tweet of parsed.tweets) {
         const key = tweet?.id
         if (key && !seenIds.has(`t:${key}`)) {
           seenIds.add(`t:${key}`)
           allTweets.push(tweet)
-          added++
+          addedTweets++
         }
       }
       for (const user of parsed.users) {
@@ -284,10 +293,10 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
         if (key && !seenIds.has(`u:${key}`)) {
           seenIds.add(`u:${key}`)
           allUsers.push(user)
-          added++
+          addedUsers++
         }
       }
-      return added
+      return { addedTweets, addedUsers }
     }
 
     processBody(firstBody)
@@ -327,10 +336,12 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
         assertSearchBodyOk(body)
 
         const previousCursor = bottomCursor
-        const added = processBody(body)
-        // No new items OR a non-advancing cursor both mean no progress,
-        // regardless of which one moved.
-        const stalled = added === 0 || bottomCursor === previousCursor
+        const { addedTweets, addedUsers } = processBody(body)
+        // Judge progress only by the active result type: a People carousel
+        // adding users must not reset the tweet stall counter (and vice
+        // versa). No progress = nothing added OR a non-advancing cursor.
+        const addedRelevant = isPeopleSearch ? addedUsers : addedTweets
+        const stalled = addedRelevant === 0 || bottomCursor === previousCursor
         idleRounds = stalled ? idleRounds + 1 : 0
       } catch (err) {
         // Rate limited or failed mid-pagination: keep what we have.
@@ -343,12 +354,13 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
     }
 
     const resultType: SearchResult['resultType'] = isPeopleSearch ? 'users' : 'tweets'
-    const results = (isPeopleSearch ? allUsers : allTweets).slice(0, maxTweets)
+    const collected = isPeopleSearch ? allUsers : allTweets
+    const results = collected.slice(0, maxTweets)
     console.log(`[Search] Found ${results.length} ${resultType}`)
     return {
       results,
       resultType,
-      totalCount: results.length,
+      totalCount: collected.length,
       hasMore: !!bottomCursor,
     }
   } finally {
