@@ -156,7 +156,9 @@ async function setupNetworkMonitoring(
   });
 
   Network.requestWillBeSent(({ requestId, request, type }) => {
-    if (type === 'XHR') {
+    // XHR covers XMLHttpRequest; Fetch covers fetch() API calls (some X
+    // endpoints, e.g. live refresh, use fetch and would be missed otherwise).
+    if (type === 'XHR' || type === 'Fetch') {
       // Reset idle timer when new XHR request starts
       resetIdleTimer();
       pendingRequests.set(requestId, {
@@ -168,7 +170,7 @@ async function setupNetworkMonitoring(
   });
 
   Network.responseReceived(({ requestId, response, type, timestamp }) => {
-    if (type === 'XHR') {
+    if (type === 'XHR' || type === 'Fetch') {
       const pending = pendingRequests.get(requestId);
       if (pending) {
         pending.responseReceived = true;
