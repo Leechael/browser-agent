@@ -1,6 +1,6 @@
-import { firstValueFrom } from 'rxjs'
-import { type PageOptions, openPage, matchedUrl } from '../common'
+import { type PageOptions, openPage, waitForMatch, PageLoadedWithoutMatchError, DEFAULT_TIMEOUTS } from '../common'
 import { extractTimeline } from './transform'
+import { SessionExpiredError } from './readTweet'
 
 export type UserTimelineTab = 'tweets' | 'replies' | 'media'
 
@@ -9,10 +9,13 @@ export type ReadUserTimelineOptions = {
   tab?: UserTimelineTab
 } & Omit<PageOptions, 'url'>
 
-const TAB_CONFIG: Record<UserTimelineTab, { urlSuffix: string; xhrPattern: string }> = {
-  tweets: { urlSuffix: '', xhrPattern: 'UserTweets' },
-  replies: { urlSuffix: '/with_replies', xhrPattern: 'UserTweetsAndReplies' },
-  media: { urlSuffix: '/media', xhrPattern: 'UserMedia' },
+// X renamed the profile timeline endpoints (UserTweets -> UserOriginalsTimeline,
+// UserTweetsAndReplies -> UserRepliesTimeline, media grid -> UserVideoTimeline).
+// Match both generations.
+const TAB_CONFIG: Record<UserTimelineTab, { urlSuffix: string; xhrPattern: RegExp }> = {
+  tweets: { urlSuffix: '', xhrPattern: /UserTweets(?!AndReplies)|UserOriginalsTimeline/ },
+  replies: { urlSuffix: '/with_replies', xhrPattern: /UserTweetsAndReplies|UserRepliesTimeline/ },
+  media: { urlSuffix: '/media', xhrPattern: /UserMedia|UserVideoTimeline/ },
 }
 
 const VALID_TABS = new Set<string>(Object.keys(TAB_CONFIG))
@@ -23,9 +26,15 @@ export async function readUserTimeline({ screen_name, tab = 'tweets', ...options
   }
   const config = TAB_CONFIG[tab]
   const url = `https://x.com/${screen_name}${config.urlSuffix}`
+  const xhrWaitTimeout = options.timeout?.xhrWait ?? DEFAULT_TIMEOUTS.xhrWait
   const { client, xhr$ } = await openPage({ ...options, url })
   try {
-    const resp = await firstValueFrom(xhr$.pipe(matchedUrl(config.xhrPattern)))
+    const resp = await waitForMatch(xhr$, config.xhrPattern, xhrWaitTimeout).catch((err) => {
+      if (err instanceof PageLoadedWithoutMatchError) {
+        throw new SessionExpiredError()
+      }
+      throw err
+    })
     const body = await resp.json()
     const result = body?.data?.user?.result
     const instructions = result?.timeline_v2?.timeline?.instructions
