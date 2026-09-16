@@ -241,6 +241,10 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
           await scrollToBottom(client.Runtime)
           continue
         }
+        if (err instanceof XhrWaitTimeoutError) {
+          await scrollToBottom(client.Runtime)
+          continue
+        }
         throw err
       }
     }
@@ -249,7 +253,12 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
     }
 
     assertSearchResponseOk(resp)
-    const firstBody = await resp.json()
+    let firstBody: any
+    try {
+      firstBody = await resp.json()
+    } catch {
+      throw new SearchPageFetchError('SearchTimeline returned invalid JSON')
+    }
     assertSearchBodyOk(firstBody)
 
     const allTweets: any[] = []
@@ -291,7 +300,11 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
     const count = () => isPeopleSearch ? allUsers.length : allTweets.length
 
     let idleRounds = 0
-    while (bottomCursor && count() < maxTweets && idleRounds < 2) {
+    let rounds = 0
+    // Hard backstop: never scroll forever even if every page looks "new".
+    const maxRounds = Math.max(5, Math.ceil(maxTweets / 20) + 3)
+    while (bottomCursor && count() < maxTweets && idleRounds < 2 && rounds < maxRounds) {
+      rounds++
       const pagePromise = waitForNextSearchPage(xhr$, xhrWaitTimeout)
       await scrollToBottom(client.Runtime)
       const nextResp = await pagePromise
@@ -303,12 +316,22 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
 
       try {
         assertSearchResponseOk(nextResp)
-        const body = await nextResp.json()
+        let body: any
+        try {
+          body = await nextResp.json()
+        } catch {
+          // Undecodable page mid-pagination: keep what we have.
+          console.log('[Search] pagination stopped early: invalid JSON page')
+          break
+        }
         assertSearchBodyOk(body)
 
         const previousCursor = bottomCursor
         const added = processBody(body)
-        idleRounds = (added === 0 && bottomCursor === previousCursor) ? idleRounds + 1 : 0
+        // No new items OR a non-advancing cursor both mean no progress,
+        // regardless of which one moved.
+        const stalled = added === 0 || bottomCursor === previousCursor
+        idleRounds = stalled ? idleRounds + 1 : 0
       } catch (err) {
         // Rate limited or failed mid-pagination: keep what we have.
         if (count() > 0 && (err instanceof RateLimitError || err instanceof SearchPageFetchError)) {
