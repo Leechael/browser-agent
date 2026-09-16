@@ -38,17 +38,20 @@ export async function readTweet({ screen_name, tweet_id, ...options }: ReadTweet
       const probablyReply = tweetEntries.find((i: any) => i?.entryId === `tweet-${tweet_id}`)
       if (probablyReply) {
         tweet = extractTweet(probablyReply?.content?.itemContent?.tweet_results?.result)
+        if (!tweet) throw new Error(`Tweet not found in timeline: ${tweet_id}`)
         const threads = tweetEntries
           .filter((i: any) => i?.entryId !== `tweet-${tweet_id}`)
           .map((i: any) => extractTweet(i.content?.itemContent?.tweet_results?.result))
+          .filter(Boolean)
         const selfThread = entries.find((i: any) => i?.content?.displayType === 'VerticalConversation' && i?.content.items[0]?.item?.itemContent?.tweetDisplayType === 'SelfThread')
-        const followUps = (selfThread?.content?.items || []).map((i: any) => extractTweet(i.item?.itemContent?.tweet_results?.result))
+        const followUps = (selfThread?.content?.items || []).map((i: any) => extractTweet(i.item?.itemContent?.tweet_results?.result)).filter(Boolean)
         tweet.threads = threads.concat(followUps)
       } else {
         tweet = extractTweet(tweetEntries[0]?.content?.itemContent?.tweet_results?.result)
+        if (!tweet) throw new Error(`Tweet not found in timeline: ${tweet_id}`)
         // Try find out self-thread
         const selfThread = entries.find((i: any) => i?.content?.displayType === 'VerticalConversation' && i?.content.items[0]?.item?.itemContent?.tweetDisplayType === 'SelfThread')
-        const threads = (selfThread?.content?.items || []).map((i: any) => extractTweet(i.item?.itemContent?.tweet_results?.result))
+        const threads = (selfThread?.content?.items || []).map((i: any) => extractTweet(i.item?.itemContent?.tweet_results?.result)).filter(Boolean)
         tweet.threads = threads
       }
       return tweet
