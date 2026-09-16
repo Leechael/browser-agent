@@ -82,7 +82,8 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
     try {
       const { results, resultType } = await search({ ...searchOptions, maxTweets: 20 })
 
-      if (signal?.aborted) break
+      // Honor abort and deadline even when the poll outlived them.
+      if (signal?.aborted || Date.now() >= deadline) break
 
       const fresh: any[] = []
       for (const item of results) {

@@ -204,8 +204,22 @@ app.get('/search/watch', async (ctx) => {
     const abort = new AbortController()
     stream.onAbort(() => abort.abort())
 
+    // Bound writes: if the client stops reading, pending writeSSE promises
+    // would otherwise accumulate heartbeats forever and stall the watch.
+    const writeEvent = async (event: string, data: string) => {
+      await Promise.race([
+        stream.writeSSE({ event, data }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('sse write timeout')), 10000)),
+      ])
+    }
+
+    let heartbeatInFlight = false
     const heartbeat = setInterval(() => {
-      stream.writeSSE({ event: 'ping', data: '{}' }).catch(() => {})
+      if (heartbeatInFlight) return
+      heartbeatInFlight = true
+      stream.writeSSE({ event: 'ping', data: '{}' })
+        .catch(() => {})
+        .finally(() => { heartbeatInFlight = false })
     }, 15000)
 
     try {
@@ -225,20 +239,20 @@ app.get('/search/watch', async (ctx) => {
         maxLifetimeMs: maxMinutes ? maxMinutes * 60 * 1000 : undefined,
         signal: abort.signal,
         onResults: async (results, resultType) => {
-          await stream.writeSSE({ event: 'results', data: JSON.stringify({ results, resultType, count: results.length }) })
+          await writeEvent('results', JSON.stringify({ results, resultType, count: results.length }))
         },
         onEvent: async (event) => {
-          await stream.writeSSE({ event: event.type, data: JSON.stringify(event) })
+          await writeEvent(event.type, JSON.stringify(event))
         },
       })
-      await stream.writeSSE({ event: 'end', data: JSON.stringify({ reason: abort.signal.aborted ? 'aborted' : 'max_lifetime' }) })
+      await writeEvent('end', JSON.stringify({ reason: abort.signal.aborted ? 'aborted' : 'max_lifetime' }))
     } catch (err) {
       if (err instanceof SessionExpiredError) {
-        await stream.writeSSE({ event: 'error', data: JSON.stringify({ error: 'session_expired', message: err.message }) })
+        await writeEvent('error', JSON.stringify({ error: 'session_expired', message: err.message })).catch(() => {})
       } else if (err instanceof RateLimitError) {
-        await stream.writeSSE({ event: 'error', data: JSON.stringify({ error: 'rate_limited', message: err.message, resetAt: err.resetAt }) })
+        await writeEvent('error', JSON.stringify({ error: 'rate_limited', message: err.message, resetAt: err.resetAt })).catch(() => {})
       } else {
-        await stream.writeSSE({ event: 'error', data: JSON.stringify({ error: 'watch_failed', message: err instanceof Error ? err.message : String(err) }) })
+        await writeEvent('error', JSON.stringify({ error: 'watch_failed', message: err instanceof Error ? err.message : String(err) })).catch(() => {})
       }
     } finally {
       clearInterval(heartbeat)
