@@ -55,22 +55,29 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
-/** Rejects when the abort signal fires or the deadline passes, whichever first. */
-function untilAbortedOrDeadline(signal: AbortSignal | undefined, deadline: number): Promise<never> {
-  return new Promise((_, reject) => {
+/** Rejects when the abort signal fires or the deadline passes, whichever first.
+ *  Call cancel() once the race is over to release the losing timer/listener. */
+function untilAbortedOrDeadline(signal: AbortSignal | undefined, deadline: number): { promise: Promise<never>, cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
+  const cancel = () => {
+    if (timer) clearTimeout(timer)
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort)
+  }
+  const promise = new Promise<never>((_, reject) => {
     const finish = (err: Error) => {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
+      cancel()
       reject(err)
     }
-    const onAbort = () => finish(new WatchAbortedError())
-    const timer = setTimeout(() => finish(new WatchDeadlineError()), Math.max(0, deadline - Date.now()))
+    onAbort = () => finish(new WatchAbortedError())
+    timer = setTimeout(() => finish(new WatchDeadlineError()), Math.max(0, deadline - Date.now()))
     if (signal?.aborted) {
       finish(new WatchAbortedError())
       return
     }
     signal?.addEventListener('abort', onAbort, { once: true })
   })
+  return { promise, cancel }
 }
 
 function resultKey(item: any): string | null {
@@ -115,8 +122,9 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
     // The poll may be orphaned by an abort/deadline racing ahead; never let
     // its late rejection crash the process.
     poll.catch(() => {})
+    const abortRace = untilAbortedOrDeadline(signal, deadline)
     try {
-      const outcome = await Promise.race([poll, untilAbortedOrDeadline(signal, deadline)])
+      const outcome = await Promise.race([poll, abortRace.promise])
       results = outcome.results
       resultType = outcome.resultType
     } catch (err) {
@@ -145,6 +153,9 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
       }
       await abortableSleep(Math.min(interval * 2, Math.max(0, deadline - Date.now())), signal)
       continue
+    } finally {
+      // Release the losing timer/listener of this round's abort race.
+      abortRace.cancel()
     }
 
     // Honor abort and deadline even when the poll outlived them.

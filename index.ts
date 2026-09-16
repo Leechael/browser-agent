@@ -257,7 +257,9 @@ app.get('/search/watch', async (ctx) => {
       // Stop the watch loop promptly; it may still be sleeping between polls.
       abort.abort()
       if (err instanceof SseWriteTimeoutError) {
-        // Client is gone — no point writing an error event into the void.
+        // Client is gone — cancel the underlying stream so pending writes are
+        // released (handler return alone queues writer.close() behind them).
+        stream.abort()
       } else if (err instanceof SessionExpiredError) {
         await writeEvent('error', JSON.stringify({ error: 'session_expired', message: err.message })).catch(() => {})
       } else if (err instanceof RateLimitError) {
