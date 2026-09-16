@@ -32,7 +32,7 @@ func newSearchCmd() *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&params.SearchType, "type", "", "Search type: top, latest, photos, videos")
+	flags.StringVar(&params.SearchType, "type", "", "Search type: top, latest, people, media")
 	flags.StringVar(&params.From, "from", "", "Filter by author")
 	flags.StringVar(&params.To, "to", "", "Filter by recipient")
 	flags.StringVar(&params.Since, "since", "", "Start date (YYYY-MM-DD)")
@@ -42,5 +42,6 @@ func newSearchCmd() *cobra.Command {
 	flags.IntVar(&params.MinFaves, "min-faves", 0, "Minimum favorite count")
 	flags.IntVar(&params.MinReplies, "min-replies", 0, "Minimum reply count")
 	flags.StringVar(&params.Lang, "lang", "", "Language code")
+	flags.IntVar(&params.Max, "max", 0, "Maximum results (default 20, auto-paginates by scrolling)")
 	return cmd
 }

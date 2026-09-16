@@ -301,10 +301,19 @@ type SearchParams struct {
 	MinFaves    int
 	MinReplies  int
 	Lang        string
+	Max         int
+}
+
+// SearchResult is the /search response envelope.
+type SearchResult struct {
+	Results    []interface{} `json:"results"`
+	ResultType string        `json:"resultType"`
+	TotalCount int           `json:"totalCount"`
+	HasMore    bool          `json:"hasMore"`
 }
 
 // Search searches tweets.
-func (c *Client) Search(params SearchParams) ([]interface{}, error) {
+func (c *Client) Search(params SearchParams) (*SearchResult, error) {
 	v := url.Values{}
 	v.Set("q", params.Q)
 	if params.SearchType != "" {
@@ -337,11 +346,14 @@ func (c *Client) Search(params SearchParams) ([]interface{}, error) {
 	if params.Lang != "" {
 		v.Set("lang", params.Lang)
 	}
-	var result []interface{}
+	if params.Max > 0 {
+		v.Set("max", strconv.Itoa(params.Max))
+	}
+	var result SearchResult
 	if err := c.get("/search?"+v.Encode(), &result); err != nil {
 		return nil, err
 	}
-	return result, nil
+	return &result, nil
 }
 
 // PostTweet posts a new tweet.
