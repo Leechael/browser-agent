@@ -245,11 +245,16 @@ function articleBlocksToMarkdown(blocks: any[]): string {
 }
 
 export function extractTweet(tweet: any) {
-  if (!tweet) return null
-  if (tweet.__typename === 'TimelineTweet') {
-    tweet = tweet.tweet_results?.result
-  } else if (tweet.__typename === 'TweetWithVisibilityResults') {
-    tweet = tweet.tweet
+  // Unwrap nested result wrappers: TimelineTweet -> tweet_results.result may
+  // itself be a TweetWithVisibilityResults wrapping the actual Tweet.
+  while (tweet) {
+    if (tweet.__typename === 'TimelineTweet') {
+      tweet = tweet.tweet_results?.result
+    } else if (tweet.__typename === 'TweetWithVisibilityResults') {
+      tweet = tweet.tweet
+    } else {
+      break
+    }
   }
   // TweetTombstone (deleted/withheld), TweetUnavailable, or any shape we
   // cannot read — treated as non-extractable.
