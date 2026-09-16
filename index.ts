@@ -12,7 +12,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { openPage } from '@/actions/common/openPage'
 import { waitForElement } from '@/actions/common/waitForElement'
-import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search } from '@/actions/twitter'
+import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search, RateLimitError } from '@/actions/twitter'
 import { zValidator } from '@hono/zod-validator'
 import { runMacro, PlaybackRequest } from '@/macros'
 import { fetchPage } from '@/actions/web'
@@ -156,20 +156,31 @@ app.get('/search', async (ctx) => {
     return n
   }
 
-  const tweets = await search({
-    query,
-    searchType: (ctx.req.query('searchType') as any) || 'top',
-    from: ctx.req.query('from'),
-    to: ctx.req.query('to'),
-    since: ctx.req.query('since'),
-    until: ctx.req.query('until'),
-    filter: ctx.req.query('filter') as any,
-    minRetweets: parseIntParam('minRetweets'),
-    minFaves: parseIntParam('minFaves'),
-    minReplies: parseIntParam('minReplies'),
-    lang: ctx.req.query('lang'),
-  })
-  return ctx.json(tweets)
+  try {
+    const result = await search({
+      query,
+      searchType: (ctx.req.query('searchType') as any) || 'top',
+      from: ctx.req.query('from'),
+      to: ctx.req.query('to'),
+      since: ctx.req.query('since'),
+      until: ctx.req.query('until'),
+      filter: ctx.req.query('filter') as any,
+      minRetweets: parseIntParam('minRetweets'),
+      minFaves: parseIntParam('minFaves'),
+      minReplies: parseIntParam('minReplies'),
+      lang: ctx.req.query('lang'),
+      maxTweets: parseIntParam('max'),
+    })
+    return ctx.json(result)
+  } catch (err) {
+    if (err instanceof SessionExpiredError) {
+      return ctx.json({ error: 'session_expired', message: err.message }, 403)
+    }
+    if (err instanceof RateLimitError) {
+      return ctx.json({ error: 'rate_limited', message: err.message, resetAt: err.resetAt }, 429)
+    }
+    throw err
+  }
 })
 
 app.get('/thread/:screen_name/:tweet_id', async (ctx) => {

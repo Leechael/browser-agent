@@ -1,6 +1,23 @@
-import { firstValueFrom } from 'rxjs'
-import { type PageOptions, openPage, matchedUrl } from '../common'
-import { extractTimeline } from './transform'
+import { type PageOptions, openPage, waitForMatch, PageLoadedWithoutMatchError, XhrWaitTimeoutError, DEFAULT_TIMEOUTS, type ObservableXHR, type XhrResponse } from '../common'
+import { extractSearchTimeline } from './transform'
+import { SessionExpiredError } from './readTweet'
+
+export class RateLimitError extends Error {
+  constructor(
+    public readonly resetAt: number | null,
+    message = 'Twitter rate limit exceeded'
+  ) {
+    super(message)
+    this.name = 'RateLimitError'
+  }
+}
+
+class SearchPageFetchError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SearchPageFetchError'
+  }
+}
 
 export interface SearchOptions extends Omit<PageOptions, 'url'> {
   query: string
@@ -16,8 +33,18 @@ export interface SearchOptions extends Omit<PageOptions, 'url'> {
   minReplies?: number
   lang?: string
 
-  // Search result type
-  searchType?: 'top' | 'latest' | 'photos' | 'videos'
+  // Search result type; 'photos'/'videos' are legacy aliases for the Media tab.
+  searchType?: 'top' | 'latest' | 'people' | 'media' | 'photos' | 'videos'
+
+  // Collect up to this many results by scrolling the result list (default 20).
+  maxTweets?: number
+}
+
+export interface SearchResult {
+  results: any[]
+  resultType: 'tweets' | 'users'
+  totalCount: number
+  hasMore: boolean
 }
 
 /**
@@ -74,27 +101,112 @@ export function buildSearchQuery(options: SearchOptions): string {
 }
 
 /**
- * Get the URL parameter for search type
+ * Get the URL parameter for search type.
+ * Current X tabs: Top / Latest / People / Media. The old `f=image` and
+ * `f=video` params are ignored by X (fall back to Top), so they map to Media.
  */
 function getSearchTypeParam(searchType?: SearchOptions['searchType']): string {
   switch (searchType) {
     case 'latest':
       return 'live'
+    case 'people':
+      return 'user'
+    case 'media':
     case 'photos':
-      return 'image'
     case 'videos':
-      return 'video'
+      return 'media'
     case 'top':
     default:
       return ''
   }
 }
 
+function getHeader(headers: Record<string, string>, name: string): string | undefined {
+  const lower = name.toLowerCase()
+  for (const key of Object.keys(headers || {})) {
+    if (key.toLowerCase() === lower) return headers[key]
+  }
+  return undefined
+}
+
+function assertSearchResponseOk(resp: XhrResponse) {
+  if (resp.status === 429) {
+    const reset = getHeader(resp.headers, 'x-rate-limit-reset')
+    throw new RateLimitError(reset ? Number(reset) : null)
+  }
+  if (resp.status < 200 || resp.status >= 300) {
+    throw new SearchPageFetchError(`SearchTimeline request failed with status ${resp.status}`)
+  }
+}
+
+function assertSearchBodyOk(body: any) {
+  if (body?.errors && !body?.data) {
+    const message = (body.errors as any[])
+      .map(e => e?.message || `code ${e?.code}`)
+      .join('; ')
+    throw new SearchPageFetchError(`SearchTimeline returned errors: ${message}`)
+  }
+}
+
 /**
- * Search tweets on Twitter/X
+ * Wait for the next SearchTimeline response on the XHR stream, ignoring idle
+ * signals (the page stays alive between scroll rounds). Resolves to null on
+ * timeout instead of throwing.
  */
-export async function search(options: SearchOptions): Promise<unknown[]> {
-  const { query, searchType, ...pageOptions } = options
+function waitForNextSearchPage(xhr$: ObservableXHR, timeoutMs: number): Promise<XhrResponse | null> {
+  return new Promise(resolve => {
+    let settled = false
+    const cleanup = () => {
+      subscription.unsubscribe()
+      clearTimeout(timeoutHandle)
+    }
+    const subscription = xhr$.subscribe({
+      next(value) {
+        if (settled) return
+        const resp = value as XhrResponse
+        if (!resp || typeof resp.url !== 'string') return
+        if (resp.url.includes('SearchTimeline')) {
+          settled = true
+          cleanup()
+          resolve(resp)
+        }
+      },
+      error() {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve(null)
+      },
+    })
+    const timeoutHandle = setTimeout(() => {
+      if (settled) return
+      settled = true
+      subscription.unsubscribe()
+      resolve(null)
+    }, timeoutMs)
+  })
+}
+
+async function scrollToBottom(Runtime: any) {
+  await Runtime.evaluate({ expression: 'window.scrollTo(0, document.body.scrollHeight)' })
+}
+
+async function isLoginRedirect(Runtime: any): Promise<boolean> {
+  const result = await Runtime.evaluate({ expression: 'location.href', returnByValue: true })
+  const href = result?.result?.value || ''
+  return href.includes('/login') || href.includes('/i/flow/')
+}
+
+/**
+ * Search tweets on Twitter/X.
+ *
+ * Pagination is driven by scrolling the result list and capturing the
+ * SearchTimeline requests the page itself issues. Replaying the API with a
+ * cursor does not work: X rejects replayed SearchTimeline requests (404)
+ * unless the x-client-transaction-id is freshly minted by the page.
+ */
+export async function search(options: SearchOptions): Promise<SearchResult> {
+  const { query, searchType, maxTweets = 20, ...pageOptions } = options
 
   // Build the full query
   const fullQuery = buildSearchQuery(options)
@@ -111,25 +223,106 @@ export async function search(options: SearchOptions): Promise<unknown[]> {
   console.log(`[Search] URL: ${url}`)
   console.log(`[Search] Query: ${fullQuery}`)
 
+  const xhrWaitTimeout = pageOptions.timeout?.xhrWait ?? DEFAULT_TIMEOUTS.xhrWait
   const { client, xhr$ } = await openPage({ ...pageOptions, url })
 
   try {
-    const resp = await firstValueFrom(xhr$.pipe(matchedUrl('SearchTimeline')))
-    const body = await resp.json()
-
-    // Extract tweets from search response
-    // Path: data.search_by_raw_query.search_timeline.timeline.instructions
-    const instructions = body?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions
-
-    if (!instructions) {
-      console.log('[Search] No instructions found in response')
-      return []
+    // The first SearchTimeline request can lag behind page idle on slower
+    // tabs (e.g. Media); retry once after a nudge before giving up.
+    let resp: XhrResponse | null = null
+    for (let attempt = 0; attempt < 2 && !resp; attempt++) {
+      try {
+        resp = await waitForMatch(xhr$, 'SearchTimeline', xhrWaitTimeout)
+      } catch (err) {
+        if (err instanceof PageLoadedWithoutMatchError) {
+          if (await isLoginRedirect(client.Runtime)) {
+            throw new SessionExpiredError()
+          }
+          await scrollToBottom(client.Runtime)
+          continue
+        }
+        throw err
+      }
+    }
+    if (!resp) {
+      throw new SearchPageFetchError('SearchTimeline did not load')
     }
 
-    const tweets = extractTimeline(instructions)
-    console.log(`[Search] Found ${tweets.length} tweets`)
+    assertSearchResponseOk(resp)
+    const firstBody = await resp.json()
+    assertSearchBodyOk(firstBody)
 
-    return tweets
+    const allTweets: any[] = []
+    const allUsers: any[] = []
+    const seenIds = new Set<string>()
+    let bottomCursor: string | null = null
+
+    function processBody(body: any): number {
+      const parsed = extractSearchTimeline(body)
+      bottomCursor = parsed.bottomCursor
+
+      let added = 0
+      for (const tweet of parsed.tweets) {
+        const key = tweet?.id
+        if (key && !seenIds.has(`t:${key}`)) {
+          seenIds.add(`t:${key}`)
+          allTweets.push(tweet)
+          added++
+        }
+      }
+      for (const user of parsed.users) {
+        const key = user?.user_id
+        if (key && !seenIds.has(`u:${key}`)) {
+          seenIds.add(`u:${key}`)
+          allUsers.push(user)
+          added++
+        }
+      }
+      return added
+    }
+
+    processBody(firstBody)
+
+    const count = () => allUsers.length > 0 ? allUsers.length : allTweets.length
+
+    let idleRounds = 0
+    while (bottomCursor && count() < maxTweets && idleRounds < 2) {
+      const pagePromise = waitForNextSearchPage(xhr$, xhrWaitTimeout)
+      await scrollToBottom(client.Runtime)
+      const nextResp = await pagePromise
+
+      if (!nextResp) {
+        idleRounds++
+        continue
+      }
+
+      try {
+        assertSearchResponseOk(nextResp)
+        const body = await nextResp.json()
+        assertSearchBodyOk(body)
+
+        const previousCursor = bottomCursor
+        const added = processBody(body)
+        idleRounds = (added === 0 && bottomCursor === previousCursor) ? idleRounds + 1 : 0
+      } catch (err) {
+        // Rate limited or failed mid-pagination: keep what we have.
+        if (count() > 0 && (err instanceof RateLimitError || err instanceof SearchPageFetchError)) {
+          console.log(`[Search] pagination stopped early: ${err.message}`)
+          break
+        }
+        throw err
+      }
+    }
+
+    const resultType: SearchResult['resultType'] = allUsers.length > 0 ? 'users' : 'tweets'
+    const results = (resultType === 'users' ? allUsers : allTweets).slice(0, maxTweets)
+    console.log(`[Search] Found ${results.length} ${resultType}`)
+    return {
+      results,
+      resultType,
+      totalCount: results.length,
+      hasMore: !!bottomCursor,
+    }
   } finally {
     await client.close()
   }
