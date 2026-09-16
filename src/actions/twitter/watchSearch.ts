@@ -27,6 +27,20 @@ const SEEN_IDS_CAP = 5000
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
+/** Sleep that resolves early when the abort signal fires. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    if (signal?.aborted) return resolve()
+    const timer = setTimeout(done, ms)
+    function done() {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', done)
+      resolve()
+    }
+    signal?.addEventListener('abort', done, { once: true })
+  })
+}
+
 function resultKey(item: any): string | null {
   return item?.id || item?.user_id || null
 }
@@ -68,6 +82,8 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
     try {
       const { results, resultType } = await search({ ...searchOptions, maxTweets: 20 })
 
+      if (signal?.aborted) break
+
       const fresh: any[] = []
       for (const item of results) {
         const key = resultKey(item)
@@ -93,7 +109,7 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
 
       const remaining = deadline - Date.now()
       if (remaining <= 0) break
-      await sleep(Math.min(interval, remaining))
+      await abortableSleep(Math.min(interval, remaining), signal)
     } catch (err) {
       if (err instanceof RateLimitError) {
         failures = 0
@@ -101,7 +117,7 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
           ? Math.max(interval, err.resetAt * 1000 - Date.now() + 1000)
           : 15 * 60 * 1000
         await emit({ type: 'rate_limited', resetAt: err.resetAt, waitMs })
-        await sleep(Math.min(waitMs, Math.max(0, deadline - Date.now())))
+        await abortableSleep(Math.min(waitMs, Math.max(0, deadline - Date.now())), signal)
         continue
       }
       if (err instanceof SessionExpiredError) {
@@ -116,7 +132,7 @@ export async function watchSearch(options: WatchSearchOptions): Promise<void> {
       if (failures >= MAX_CONSECUTIVE_FAILURES) {
         throw err
       }
-      await sleep(Math.min(interval * 2, Math.max(0, deadline - Date.now())))
+      await abortableSleep(Math.min(interval * 2, Math.max(0, deadline - Date.now())), signal)
     }
   }
 }
