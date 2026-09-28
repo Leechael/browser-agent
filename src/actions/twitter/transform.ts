@@ -454,7 +454,9 @@ export function extractSearchTimeline(body: any): SearchTimelineExtraction {
         continue
       }
       if (content?.entryType === 'TimelineTimelineItem') {
-        handleItemContent(content.itemContent)
+        if (content?.clientEventInfo?.component !== 'following_promoted') {
+          handleItemContent(content.itemContent)
+        }
       }
       continue
     }
