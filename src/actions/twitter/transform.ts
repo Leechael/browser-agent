@@ -441,6 +441,25 @@ export function extractSearchTimeline(body: any): SearchTimelineExtraction {
   }
 
   for (const instruction of instructions) {
+    // Pagination continuations also arrive as TimelineReplaceEntry: from the
+    // second SearchTimeline page onward X sends the new Top/Bottom cursors as
+    // entry replacements instead of AddEntries entries. Missing the replaced
+    // Bottom cursor makes pagination stop after ~2 pages (~40 tweets).
+    if (instruction.type === 'TimelineReplaceEntry') {
+      const content = instruction.entry?.content
+      if (content?.entryType === 'TimelineTimelineCursor') {
+        if (content.cursorType === 'Bottom' && content.value) {
+          bottomCursor = content.value
+        }
+        continue
+      }
+      if (content?.entryType === 'TimelineTimelineItem') {
+        if (content?.clientEventInfo?.component !== 'following_promoted') {
+          handleItemContent(content.itemContent)
+        }
+      }
+      continue
+    }
     if (instruction.type !== 'TimelineAddEntries') continue
     for (const entry of instruction.entries || []) {
       const content = entry.content
