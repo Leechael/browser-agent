@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { UpstreamChallengeError, isChallengeBody } from '../src/actions/twitter/search'
+import { UpstreamChallengeError, isChallengeBody, isChallengeHeaders } from '../src/actions/twitter/search'
 
 // Incident 2026-10-20: X challenged the headless session with a Cloudflare
 // Turnstile page (/account/access). The SearchTimeline XHR then returned the
@@ -22,6 +22,19 @@ test('isChallengeBody ignores ordinary JSON and error pages', () => {
   assert.equal(isChallengeBody(JSON.stringify({ data: { search_by_raw_query: {} } })), false)
   assert.equal(isChallengeBody('<html><body>Something went wrong, but not a challenge</body></html>'), false)
   assert.equal(isChallengeBody(''), false)
+})
+
+test('isChallengeHeaders detects the documented cf-mitigated contract', () => {
+  // https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/
+  assert.equal(isChallengeHeaders({ 'cf-mitigated': 'challenge' }), true)
+  // Header names arrive with varying case from CDP; lookup must be tolerant.
+  assert.equal(isChallengeHeaders({ 'CF-Mitigated': 'challenge' }), true)
+  // Corroborating but non-proving signals must not classify on their own.
+  assert.equal(isChallengeHeaders({ 'cf-ray': 'a4d239313fafd4b4-HKG', 'server': 'cloudflare' }), false)
+  assert.equal(isChallengeHeaders({ 'content-type': 'text/html' }), false)
+  assert.equal(isChallengeHeaders({}), false)
+  // A completed or absent mitigation is not an active challenge.
+  assert.equal(isChallengeHeaders({ 'cf-mitigated': 'none' }), false)
 })
 
 test('UpstreamChallengeError is a distinct, exported error type', () => {

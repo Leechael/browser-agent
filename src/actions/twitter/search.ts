@@ -48,6 +48,18 @@ export function isChallengeBody(raw: unknown): boolean {
   )
 }
 
+/**
+ * Detect an intercepted request via Cloudflare's documented contract:
+ * the `cf-mitigated: challenge` response header means the body is a
+ * Challenge Page, not the requested resource.
+ * https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/
+ * `cf-ray` or `cf-chl-*` alone do NOT prove a challenge — don't classify on them.
+ */
+export function isChallengeHeaders(headers: Record<string, string>): boolean {
+  const mitigated = getHeader(headers || {}, 'cf-mitigated')
+  return typeof mitigated === 'string' && mitigated.toLowerCase() === 'challenge'
+}
+
 export interface SearchOptions extends Omit<PageOptions, 'url'> {
   query: string
 
@@ -159,6 +171,9 @@ function getHeader(headers: Record<string, string>, name: string): string | unde
 }
 
 function assertSearchResponseOk(resp: XhrResponse) {
+  if (isChallengeHeaders(resp.headers)) {
+    throw new UpstreamChallengeError()
+  }
   if (resp.status === 429) {
     const reset = getHeader(resp.headers, 'x-rate-limit-reset')
     throw new RateLimitError(reset ? Number(reset) : null)
@@ -240,10 +255,14 @@ async function isChallengeRedirect(Runtime: any): Promise<boolean> {
 
 /**
  * Decide whether a failed resp.json() means the session is behind a
- * Cloudflare challenge. Sniffs the raw body first (cheapest signal), then
- * the page URL. Returns the classified error to throw.
+ * Cloudflare challenge. Cheapest signal first: the documented
+ * `cf-mitigated: challenge` header needs no extra CDP round-trip; then the
+ * raw body; then the page URL. Returns the classified error to throw.
  */
 async function classifyInvalidSearchJson(resp: XhrResponse, Runtime: any): Promise<Error> {
+  if (isChallengeHeaders(resp.headers)) {
+    return new UpstreamChallengeError()
+  }
   const raw = await resp.body().catch(() => '')
   if (isChallengeBody(raw)) {
     return new UpstreamChallengeError()
