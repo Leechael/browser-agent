@@ -12,7 +12,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { openPage } from '@/actions/common/openPage'
 import { waitForElement } from '@/actions/common/waitForElement'
-import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search, watchSearch, RateLimitError } from '@/actions/twitter'
+import { readHomeTimeline, readUserTimeline, readMentions, readTweet, readThread, postTweet, SessionExpiredError, search, watchSearch, RateLimitError, UpstreamChallengeError } from '@/actions/twitter'
 import { zValidator } from '@hono/zod-validator'
 import { runMacro, PlaybackRequest } from '@/macros'
 import { fetchPage } from '@/actions/web'
@@ -179,6 +179,9 @@ app.get('/search', async (ctx) => {
     if (err instanceof RateLimitError) {
       return ctx.json({ error: 'rate_limited', message: err.message, resetAt: err.resetAt }, 429)
     }
+    if (err instanceof UpstreamChallengeError) {
+      return ctx.json({ error: 'upstream_challenge', message: err.message }, 503)
+    }
     throw err
   }
 })
@@ -274,6 +277,8 @@ app.get('/search/watch', async (ctx) => {
         await writeEvent('error', JSON.stringify({ error: 'session_expired', message: err.message })).catch(() => {})
       } else if (err instanceof RateLimitError) {
         await writeEvent('error', JSON.stringify({ error: 'rate_limited', message: err.message, resetAt: err.resetAt })).catch(() => {})
+      } else if (err instanceof UpstreamChallengeError) {
+        await writeEvent('error', JSON.stringify({ error: 'upstream_challenge', message: err.message })).catch(() => {})
       } else {
         await writeEvent('error', JSON.stringify({ error: 'watch_failed', message: err instanceof Error ? err.message : String(err) })).catch(() => {})
       }
