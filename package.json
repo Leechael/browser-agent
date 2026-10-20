@@ -3,7 +3,9 @@
   "module": "index.ts",
   "type": "module",
   "scripts": {
-    "dev": "tsx dev.ts"
+    "dev": "tsx dev.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/chrome-remote-interface": "^0.31.14",

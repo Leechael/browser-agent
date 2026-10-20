@@ -12,11 +12,40 @@ export class RateLimitError extends Error {
   }
 }
 
+/**
+ * X served a Cloudflare security-verification challenge (Turnstile) instead
+ * of the requested API. The browser session is poisoned until a human
+ * clears the challenge; retrying without intervention will keep failing.
+ */
+export class UpstreamChallengeError extends Error {
+  constructor(
+    message = 'X requires security verification (Cloudflare challenge) on the browser session; human intervention needed'
+  ) {
+    super(message)
+    this.name = 'UpstreamChallengeError'
+  }
+}
+
 class SearchPageFetchError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'SearchPageFetchError'
   }
+}
+
+/**
+ * Detect Cloudflare challenge HTML in a response body. When X challenges the
+ * session, API responses (or the whole page) are replaced with the
+ * verification interstitial, which is undecodable as the expected JSON.
+ */
+export function isChallengeBody(raw: unknown): boolean {
+  if (typeof raw !== 'string' || raw.length === 0) return false
+  return (
+    raw.includes('challenges.cloudflare.com') ||
+    raw.includes('cf-chl') ||
+    raw.includes('Just a moment') ||
+    raw.includes('Performing security verification')
+  )
 }
 
 export interface SearchOptions extends Omit<PageOptions, 'url'> {
@@ -198,6 +227,34 @@ async function isLoginRedirect(Runtime: any): Promise<boolean> {
 }
 
 /**
+ * True when the page itself is sitting on X's security-verification
+ * interstitial (/account/access) or a Cloudflare challenge URL. Unlike a
+ * login redirect, this requires a human to clear the challenge; a session
+ * refresh does not help.
+ */
+async function isChallengeRedirect(Runtime: any): Promise<boolean> {
+  const result = await Runtime.evaluate({ expression: 'location.href', returnByValue: true })
+  const href = result?.result?.value || ''
+  return href.includes('/account/access') || href.includes('challenges.cloudflare.com')
+}
+
+/**
+ * Decide whether a failed resp.json() means the session is behind a
+ * Cloudflare challenge. Sniffs the raw body first (cheapest signal), then
+ * the page URL. Returns the classified error to throw.
+ */
+async function classifyInvalidSearchJson(resp: XhrResponse, Runtime: any): Promise<Error> {
+  const raw = await resp.body().catch(() => '')
+  if (isChallengeBody(raw)) {
+    return new UpstreamChallengeError()
+  }
+  if (await isChallengeRedirect(Runtime)) {
+    return new UpstreamChallengeError()
+  }
+  return new SearchPageFetchError('SearchTimeline returned invalid JSON')
+}
+
+/**
  * Search tweets on Twitter/X.
  *
  * Pagination is driven by scrolling the result list and capturing the
@@ -269,7 +326,7 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
     try {
       firstBody = await resp.json()
     } catch {
-      throw new SearchPageFetchError('SearchTimeline returned invalid JSON')
+      throw await classifyInvalidSearchJson(resp, client.Runtime)
     }
     assertSearchBodyOk(firstBody)
 
@@ -333,6 +390,11 @@ export async function search(options: SearchOptions): Promise<SearchResult> {
         try {
           body = await nextResp.json()
         } catch {
+          // A challenge mid-pagination poisons the whole session, not just
+          // this page: surface it instead of silently truncating results.
+          if (await isChallengeRedirect(client.Runtime)) {
+            throw new UpstreamChallengeError()
+          }
           // Undecodable page mid-pagination: keep what we have.
           console.log('[Search] pagination stopped early: invalid JSON page')
           break
